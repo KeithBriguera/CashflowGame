@@ -1,0 +1,10 @@
+{
+  "name": "AHON! Player",
+  "short_name": "AHON!",
+  "start_url": "/play.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3ead8",
+  "theme_color": "#fffaf0",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

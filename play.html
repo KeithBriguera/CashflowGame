@@ -1,209 +1,235 @@
 <!doctype html>
-<html lang="tl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0f1722">
+<meta name="theme-color" content="#fffaf0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
 <title>AHON! Player</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="phone" id="app"></div>
-<div id="toast" class="toast" style="display:none"></div>
+<div id="overlay"></div>
+<script src="art.js"></script>
+<script src="sfx.js"></script>
 <script src="common.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
-let S = null, session = null, net, toastT, lastRollSeq = 0, joinErr = '';
+let S = null, session = null, net, toastT, joinErr = '', tab = 'play', pickAv = null, lastRollSeq = 0, lastCash = null, lastEvt = 0, lastKey = '';
 try { session = JSON.parse(localStorage.getItem('ahon_session') || 'null'); } catch {}
 const app = document.getElementById('app');
+const vib = p => { try { navigator.vibrate && navigator.vibrate(p); } catch {} };
 
 function toast(msg) {
-  const el = document.getElementById('toast');
-  el.textContent = msg; el.style.display = 'block';
-  clearTimeout(toastT); toastT = setTimeout(() => el.style.display = 'none', 3200);
+  document.querySelectorAll('.toast').forEach(e => e.remove());
+  const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg; document.body.appendChild(el);
+  vib([60, 40, 60]); clearTimeout(toastT); toastT = setTimeout(() => el.remove(), 3200);
 }
-function send(o) { net.send(o); }
+const send = o => { vib(12); net.send(o); };
 
 net = connectWS({
-  open() {
-    const code = (session && session.code) || params.get('room');
-    if (session && session.token) net.send({ t: 'join', code: session.code, token: session.token });
-    else renderJoin();
-  },
+  open() { session && session.token ? net.send({ t: 'join', code: session.code, token: session.token }) : renderJoin(); },
   message(m) {
     if (m.t === 'joined') { session = { code: m.code, token: m.token, pid: m.pid }; localStorage.setItem('ahon_session', JSON.stringify(session)); }
-    else if (m.t === 'join_error') {
-      if (session) { localStorage.removeItem('ahon_session'); session = null; }
-      joinErr = m.msg; renderJoin();
-    }
-    else if (m.t === 'kicked') { localStorage.removeItem('ahon_session'); session = null; S = null; joinErr = 'Inalis ka ng host.'; renderJoin(); }
+    else if (m.t === 'join_error') { if (session) { localStorage.removeItem('ahon_session'); session = null; } joinErr = m.msg; renderJoin(); }
+    else if (m.t === 'kicked') { localStorage.removeItem('ahon_session'); session = null; S = null; joinErr = 'The host removed you from the room.'; renderJoin(); }
     else if (m.t === 'toast') toast(m.msg);
-    else if (m.t === 'state') { S = m; render(); }
-  },
-  close() {}
+    else if (m.t === 'state') { S = m; onState(); }
+  }
 });
 
+/* ---------- join ---------- */
 function renderJoin() {
+  const sel = pickAv == null ? 0 : pickAv;
   app.innerHTML = `
-    <h1>🪜 AHON!</h1>
-    <p class="mute">Landas tungo sa kalayaan sa pera. Ilagay ang room code na nasa malaking screen.</p>
+    <div class="hero-logo">${ART.logo(54)}</div>
+    <p class="mute center-t" style="margin:0 0 16px">Climb out of the paycheck race. Enter the room code shown on the big screen.</p>
     <div class="card stack">
-      <input id="code" inputmode="numeric" maxlength="4" placeholder="Room code (4 digits)" value="${esc(params.get('room') || '')}">
-      <input id="name" maxlength="16" placeholder="Pangalan mo" autocomplete="nickname">
-      <button class="big-btn" id="go">Sumali</button>
-      ${joinErr ? `<div class="bad-t">${esc(joinErr)}</div>` : ''}
+      <input id="code" inputmode="numeric" maxlength="4" placeholder="Room code" value="${esc(params.get('room') || '')}" style="text-align:center;font-size:1.4rem;letter-spacing:.3em">
+      <input id="name" maxlength="16" placeholder="Your name" autocomplete="nickname">
+      <div class="mute small" style="font-weight:700;letter-spacing:.08em">CHOOSE YOUR CHARACTER</div>
+      <div class="avgrid">${[0, 1, 2, 3, 4, 5, 6, 7].map(i => `<button class="${i === sel ? 'sel' : ''}" onclick="pickAv=${i};renderJoin()">${ART.avatar(i)}</button>`).join('')}</div>
+      <button class="big-btn" id="go">Join game</button>
+      ${joinErr ? `<div class="bad-t center-t">${esc(joinErr)}</div>` : ''}
     </div>`;
+  const c = sessionStorage.getItem('ahon_code_draft'), n = sessionStorage.getItem('ahon_name_draft');
+  if (n) document.getElementById('name').value = n;
+  document.getElementById('name').oninput = e => sessionStorage.setItem('ahon_name_draft', e.target.value);
   document.getElementById('go').onclick = () => {
-    joinErr = '';
-    net.send({ t: 'join', code: document.getElementById('code').value.trim(), name: document.getElementById('name').value.trim() });
+    joinErr = ''; vib(15);
+    net.send({ t: 'join', code: document.getElementById('code').value.trim(), name: document.getElementById('name').value.trim(), avatar: sel });
   };
 }
 
 const me = () => S && S.players.find(p => p.id === S.you);
 
-function render() {
+/* ---------- state ---------- */
+function onState() {
   const p = me();
   if (!p) { renderJoin(); return; }
+  if (S.evt && S.evt.n !== lastEvt) {
+    const first = lastEvt === 0; lastEvt = S.evt.n;
+    if (!first && S.evt.pid === p.id) {
+      if (['payday', 'buy', 'sell', 'donate'].includes(S.evt.type)) vib([30, 30, 60]);
+      if (['doodad', 'baby', 'downsized'].includes(S.evt.type)) vib([200]);
+      if (S.evt.type === 'escape') { vib([100, 60, 100, 60, 300]); FX.confetti(); }
+    }
+    if (S.evt.type === 'escape' && S.evt.pid !== p.id) FX.confetti();
+  }
+  const t = S.turn;
+  if (t && t.pid === p.id && S.state === 'playing') { const k = t.phase + (t.pending ? t.pending.kind : '') + S.round; if (k !== lastKey) { lastKey = k; vib(t.phase === 'roll' ? [80, 60, 80] : 20); if (tab !== 'play') tab = 'play'; } }
+  render();
+}
+
+function render() {
+  const p = me();
+  if (!p) return renderJoin();
   if (S.state === 'lobby') return renderLobby(p);
   if (S.state === 'ended') return renderEnded(p);
   renderGame(p);
 }
 
 function renderLobby(p) {
-  app.innerHTML = `
-    <h1>Hi, ${esc(p.name)}! 👋</h1>
-    <div class="card"><b>Room ${esc(S.code)}</b><p class="mute">Hintayin ang host na magsimula ng laro.</p>
-    <div>${S.players.map(q => `<span class="pill"><span class="dot" style="background:${q.color}"></span>${esc(q.name)}${q.bot ? ' 🤖' : ''}</span> `).join(' ')}</div></div>`;
+  const taken = new Set(S.players.filter(q => q.id !== p.id).map(q => q.avatar));
+  app.innerHTML = `<div class="hero-logo">${ART.logo(46)}</div>
+    <div class="card center-t"><div style="display:grid;place-items:center">${ART.avatar(p.avatar, 96)}</div>
+      <h2 style="margin-top:8px">You're in, ${esc(p.name)}!</h2><p class="mute">Room <b class="gold-t">${esc(S.code)}</b>. Waiting for the host to start…</p></div>
+    <div class="card"><h3>Change character</h3><div class="avgrid">${[0, 1, 2, 3, 4, 5, 6, 7].map(i => `<button class="${i === p.avatar ? 'sel' : ''}" ${taken.has(i) ? 'disabled' : ''} onclick="send({t:'set_avatar',avatar:${i}})">${ART.avatar(i)}</button>`).join('')}</div></div>
+    <div class="card"><h3>Who's here</h3><div style="display:flex;flex-wrap:wrap;gap:8px">${S.players.map(q => `<span class="pill">${ART.avatar(q.avatar, 22)} ${esc(q.name)}</span>`).join('')}</div></div>
+    ${glossaryBtn()}`;
 }
 
-function dieFace(n) { return ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'][n]; }
+const glossaryBtn = () => `<p class="center-t"><button class="ghost" onclick="openGlossary()">${ART.ui('book', 18)} Money terms explained</button></p>`;
+function openGlossary() {
+  document.getElementById('overlay').innerHTML = `<div class="sheet-bg" onclick="closeSheet(event)"><div class="sheet"><div style="display:flex;justify-content:space-between;align-items:center"><h2>Money terms</h2><button class="sec" onclick="closeSheet()">Close</button></div><dl class="gl">${GLOSSARY.map(([a, b]) => `<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join('')}</dl></div></div>`;
+}
+function closeSheet(e) { if (e && e.target !== e.currentTarget) return; document.getElementById('overlay').innerHTML = ''; }
+
+/* ---------- game ---------- */
+function hud(p) {
+  const c = p.calc, pct = Math.min(100, c.coverage * 100), R = 28, circ = 2 * Math.PI * R;
+  const flash = lastCash !== null && lastCash !== p.cash ? 'flash' : ''; lastCash = p.cash;
+  return `<div class="hud"><div class="ring"><svg class="prog" viewBox="0 0 60 60"><circle cx="30" cy="30" r="${R}" fill="none" stroke="rgba(29,36,51,.15)" stroke-width="4"/><circle cx="30" cy="30" r="${R}" fill="none" stroke="${c.coverage >= 1 ? '#2fae8f' : '#f2b632'}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ * (1 - pct / 100)}" style="transition:stroke-dashoffset .8s"/></svg>${ART.avatar(p.avatar, 52)}</div>
+    <div class="who"><b>${esc(p.name)}</b><span class="mute small">${esc(p.prof)} • Round ${Math.min(S.round, S.settings.maxRounds)}/${S.settings.maxRounds}</span></div>
+    <div class="cashbox ${flash}"><span class="mute small">Cash</span><b class="${p.cash < 0 ? 'bad-t' : ''}">${peso(p.cash)}</b></div></div>`;
+}
+
+function timerBar(t) {
+  if (!t || !t.deadline) return '';
+  const total = S.settings.timer * 1000, left = Math.max(0, t.deadline - (Date.now() + (S.now - Date.now())));
+  return `<div class="timerbar"><i style="width:${Math.min(100, left / total * 100)}%;animation:shrink ${left}ms linear forwards"></i></div><style>@keyframes shrink{to{width:0}}</style>`;
+}
 
 function renderGame(p) {
-  const c = p.calc, t = S.turn, mine = t && t.pid === p.id;
-  const cur = t && S.players.find(x => x.id === t.pid);
-  const pend = t && t.pending;
-  const pct = Math.min(100, Math.round(c.coverage * 100));
-  const rollAnim = t && t.lastRoll && t.lastRoll.n !== lastRollSeq;
-  if (t && t.lastRoll) lastRollSeq = t.lastRoll.n;
-
-  let action = '';
-  if (p.free) {
-    action = `<div class="card tone-good"><h2>🎉 Malaya ka na!</h2><p>Mas malaki na ang passive income mo kaysa expenses. Pwede kang mag-relax habang naglalaro ang iba, o tulungan silang mag-isip ng desisyon.</p></div>`;
-  } else if (!t) {
-    action = '';
-  } else if (!mine) {
-    action = `<div class="banner other">Turn ni ${esc(cur ? cur.name : '')}…</div>`;
-  } else if (t.phase === 'roll') {
-    action = `<div class="banner me">Turn mo na!</div>
-      ${p.dbl ? `<div class="card small">🤝 Bonus: 2 dice ang roll mo (${p.dbl} turn pa).</div>` : ''}
-      <button class="big-btn" onclick="send({t:'roll'})">🎲 Mag-roll</button>`;
-  } else if (pend) {
-    action = `<div class="banner me">Turn mo na!</div>` + renderPending(p, pend);
-  }
-
-  const lastRoll = t && t.lastRoll && t.lastRoll.pid === p.id && mine
-    ? `<div class="dice" style="margin:8px 0">${t.lastRoll.dice.map(d => `<div class="die ${rollAnim ? 'roll' : ''}">${d}</div>`).join('')}</div>` : '';
-
-  app.innerHTML = `
-    <div class="topbar">
-      <div><span class="dot" style="background:${p.color}"></span><b>${esc(p.name)}</b><div class="mute small">${p.emoji} ${esc(p.prof)} • Round ${S.round}/${S.maxRounds}</div></div>
-      <div style="text-align:right"><div class="mute small">Cash</div><div class="cash ${p.cash < 0 ? 'bad-t' : ''}">${peso(p.cash)}</div></div>
-    </div>
-    ${lastRoll}
-    ${action}
-
-    <div class="card">
-      <h3>Landas ng Kalayaan</h3>
-      <div class="bar"><i style="width:${pct}%"></i></div>
-      <div class="small mute" style="margin-top:6px">Passive income ${peso(c.passive)} / Expenses ${peso(c.expenses)} (${Math.round(c.coverage * 100)}%). Kapag umabot ng 100%, panalo ka!</div>
-    </div>
-
-    <div class="card">
-      <h3>Income statement (buwan-buwan)</h3>
-      <div class="row"><span>Sahod</span><b>${peso(p.salary)}</b></div>
-      <div class="row"><span>Passive income</span><b class="good-t">${peso(c.passive)}</b></div>
-      <div class="row"><span>Buwis</span><span>${peso(p.taxes)}</span></div>
-      <div class="row"><span>Iba pang gastos</span><span>${peso(p.other)}</span></div>
-      ${p.children ? `<div class="row"><span>Mga anak (${p.children})</span><span>${peso(p.children * p.childCost)}</span></div>` : ''}
-      <div class="row"><span>Bayad sa utang</span><span>${peso(c.liabPay)}</span></div>
-      <div class="row"><b>Cashflow</b><b class="${c.cashflow >= 0 ? 'good-t' : 'bad-t'}">${peso(c.cashflow)}</b></div>
-    </div>
-
-    <div class="card">
-      <h3>Assets</h3>
-      ${p.assets.length ? p.assets.map(a => `<div class="row"><span>${esc(a.name)}<div class="mute small">Utang: ${peso(a.mortgage)}</div></span><b class="good-t">+${peso(a.cf)}</b></div>`).join('') : '<div class="mute">Wala pa. Hanapin ang unang asset mo!</div>'}
-    </div>
-
-    <div class="card">
-      <h3>Mga utang</h3>
-      ${p.liabs.length ? p.liabs.map(l => `<div class="row"><span>${esc(l.name)}<div class="mute small">Balanse ${peso(l.balance)} • bayad ${peso(l.pay)}/buwan</div></span>
-        <button class="sec small" onclick="send({t:'payoff',id:'${l.id}'})" ${p.cash < l.balance ? 'disabled' : ''}>Bayaran</button></div>`).join('') : '<div class="mute">Wala kang utang! 👏</div>'}
-      <div class="small mute" style="margin-top:8px">Bank loan: 10% ng utang ang babayaran mo buwan-buwan.</div>
-      <div class="grid2" style="margin-top:8px">
-        <button class="sec" onclick="if(confirm('Umutang ng ₱10,000? Dagdag ₱1,000 buwan-buwan.'))send({t:'loan',amount:10000})">Utang ₱10k</button>
-        <button class="sec" onclick="if(confirm('Umutang ng ₱50,000? Dagdag ₱5,000 buwan-buwan.'))send({t:'loan',amount:50000})">Utang ₱50k</button>
-      </div>
-    </div>
-
-    <div class="card"><h3>Mga nangyayari</h3>${S.log.slice(-8).reverse().map(l => `<div class="logline">${esc(l.msg)}</div>`).join('')}</div>`;
+  const t = S.turn, mine = t && t.pid === p.id, cur = t && S.players.find(x => x.id === t.pid);
+  const c = p.calc;
+  let body = '';
+  if (tab === 'play') body = playTab(p, mine, cur);
+  else if (tab === 'money') body = moneyTab(p);
+  else body = logTab();
+  app.innerHTML = hud(p) + body + `<div class="tabs"><div class="in">
+    ${[['play', 'dice', 'Play'], ['money', 'wallet', 'My money'], ['log', 'news', 'News']].map(([k, e, l]) => `<button class="${tab === k ? 'on' : ''}" onclick="tab='${k}';render()">${ART.ui(e, 22)}${l}</button>`).join('')}
+    <button onclick="openGlossary()">${ART.ui('book', 22)}Terms</button></div></div>`;
 }
 
-function renderPending(p, pend) {
+function playTab(p, mine, cur) {
+  const t = S.turn, pend = t && t.pending;
+  const c = p.calc;
+  const roll = t && t.lastRoll, rolled = roll && roll.n !== lastRollSeq; if (roll) lastRollSeq = roll.n;
+  let h = '';
+  if (p.free) {
+    h += `<div class="gcard result tone-good" style="--tc:#8ddbc3"><div class="gc-head"><span class="tag">YOU ESCAPED!</span></div><div class="gc-art">${ART.icon('payday', 110)}</div><p class="blurb big">Your passive income now covers every expense. You are financially free in this game. Cheer on the others and help them think through their choices!</p></div>`;
+  } else if (!t) {
+    h += '';
+  } else if (!mine) {
+    h += `<div class="banner other">${ART.avatar(cur.avatar, 30)}<span>${esc(cur.name)} is playing…</span></div>`;
+    if (pend && pend.kind === 'deal') h += dealCardHTML(pend.card, pend.size);
+    else if (pend && pend.kind === 'result') h += resultCardHTML(pend);
+    else if (pend && pend.kind === 'market') h += marketCardHTML(pend, false);
+    else h += `<div class="card center-t mute">Watch the big screen. Your turn is coming up!</div>`;
+  } else {
+    h += `<div class="banner me">Your turn</div>` + timerBar(t);
+    if (t.phase === 'roll') {
+      h += `${p.dbl ? `<div class="card small center-t">Bonus: you roll 2 dice for ${p.dbl} more turn${p.dbl > 1 ? 's' : ''}.</div>` : ''}
+        <div class="card rollzone"><div class="bigdie"><div class="dice">${dieHTML(4)}${dieHTML(2)}</div></div><p class="mute">Tap to roll and move along the board.</p><button class="big-btn" onclick="send({t:'roll'})">Roll the dice</button></div>`;
+    } else if (pend) {
+      if (roll && roll.pid === p.id) h += `<div style="text-align:center;margin:0 0 12px"><div class="dice">${roll.dice.map(d => dieHTML(d, rolled)).join('')}</div></div>`;
+      h += pendingHTML(p, pend);
+    }
+  }
+  // quick progress card
+  h += `<div class="card"><h3>Road to freedom</h3><div class="bar thick"><i style="width:${Math.min(100, Math.round(c.coverage * 100))}%"></i></div>
+    <p class="small mute" style="margin:8px 0 0">Passive income <b class="good-t">${peso(c.passive)}</b> vs expenses <b>${peso(c.expenses)}</b> a month (${Math.round(c.coverage * 100)}%). Reach 100% to win.</p></div>`;
+  return h;
+}
+
+function pendingHTML(p, pend) {
   switch (pend.kind) {
     case 'opp_choice':
-      return `${pend.note ? `<div class="card small">${esc(pend.note)}</div>` : ''}<div class="card deal"><h2>🎯 Oportunidad!</h2>
-        <p>Pumili ng uri ng deal. Ang <b>small deal</b> ay mas mura at ang <b>big deal</b> ay mas malaki ang kita pero kailangan ng mas maraming pera.</p>
+      return `${pend.note ? `<div class="card small">${esc(pend.note)}</div>` : ''}
+        <div class="gcard" style="--tc:#f2b632"><div class="gc-head"><span class="tag">OPPORTUNITY</span></div><div class="gc-art">${ART.icon('opp', 110)}</div>
+        <h2>Pick a deal</h2><p class="blurb">A <b>small deal</b> costs less. A <b>big deal</b> pays more but needs far more cash.</p>
         <div class="grid2"><button onclick="send({t:'choose_deal',size:'small'})">Small deal</button><button class="good" onclick="send({t:'choose_deal',size:'big'})">Big deal</button></div></div>`;
     case 'deal': {
-      const c = pend.card, short = Math.max(0, c.down - p.cash);
-      return `<div class="card deal"><h2>${esc(c.name)}</h2><p>${esc(c.blurb)}</p>
-        <div class="row"><span>Presyo</span><b>${peso(c.cost)}</b></div>
-        <div class="row"><span>Down payment</span><b>${peso(c.down)}</b></div>
-        <div class="row"><span>Utang (mortgage)</span><span>${peso(c.mortgage)}</span></div>
-        <div class="row"><span>Passive income / buwan</span><b class="good-t">+${peso(c.cf)}</b></div>
-        <div class="grid2" style="margin-top:12px">
-          ${short ? `<button class="sec" onclick="send({t:'buy',loan:true})">Bilhin + umutang ng ${peso(Math.ceil(short / 1000) * 1000)}</button>` : `<button class="good" onclick="send({t:'buy'})">Bilhin</button>`}
-          <button class="sec" onclick="send({t:'pass'})">Pass</button>
-        </div>
-        ${short ? `<div class="small bad-t" style="margin-top:8px">Kulang ka ng ${peso(short)}. Ang utang ay may 10% na bayad buwan-buwan, isipin kung sulit.</div>` : ''}
-        <div class="small mute" style="margin-top:8px">Tip: ihambing ang passive income sa binabayaran mong utang.</div></div>`;
+      const c = pend.card, short = Math.max(0, c.down - p.cash), loan = Math.ceil(short / 1000) * 1000;
+      return dealCardHTML(c, pend.size) + `<div class="card" style="margin-top:12px">
+        <div class="grid2">${short ? `<button class="sec" onclick="send({t:'buy',loan:true})">Buy + borrow ${compact(loan)}</button>` : `<button class="good" onclick="send({t:'buy'})">Buy it</button>`}<button class="sec" onclick="send({t:'pass'})">Pass</button></div>
+        ${short ? `<p class="small bad-t" style="margin:10px 0 0">You are ${peso(short)} short. Bank loans cost 10% of the loan every month, so think about whether this deal pays enough.</p>` : `<p class="small mute" style="margin:10px 0 0">After the down payment you will have ${peso(p.cash - c.down)} left.</p>`}</div>`;
     }
     case 'market':
-      return `<div class="card deal"><h2>📈 Market</h2><p>${esc(pend.card.text)}</p>
-        ${pend.options.map(o => `<div class="row"><span>${esc(o.name)}<div class="small mute">Alok ${peso(o.offer)} • net ${peso(o.net)}</div></span>
-          <button class="good" onclick="send({t:'sell',assetId:'${o.assetId}'})">Ibenta</button></div>`).join('')}
-        <button class="sec big-btn" style="margin-top:10px" onclick="send({t:'keep'})">Huwag ibenta</button></div>`;
+      return `<div class="gcard market" style="--tc:#9ccdf0"><div class="gc-head"><span class="tag">MARKET NEWS</span></div><div class="gc-art">${ART.icon('market', 100)}</div><p class="blurb big">${esc(pend.card.text)}</p>
+        ${pend.options.map(o => `<div class="row"><div style="display:flex;gap:10px;align-items:center">${ART.icon(o.icon, 40)}<div><b>${esc(o.name)}</b><div class="sub">Offer ${peso(o.offer)} • ${peso(o.net)} after its loan</div></div></div><button class="good" onclick="send({t:'sell',assetId:'${o.assetId}'})">Sell</button></div>`).join('')}
+        <button class="sec big-btn" style="margin-top:12px" onclick="send({t:'keep'})">Keep my assets</button></div>`;
     case 'charity':
-      return `<div class="card deal"><h2>🤝 Tulong</h2><p>Gusto mo bang mag-donate ng <b>${peso(pend.amount)}</b> (10% ng income)? Gantimpala: 2 dice ang roll mo sa susunod na 3 turns.</p>
-        <div class="grid2"><button class="good" ${p.cash < pend.amount ? 'disabled' : ''} onclick="send({t:'donate'})">Mag-donate</button><button class="sec" onclick="send({t:'skip_charity'})">Hindi muna</button></div></div>`;
+      return `<div class="gcard" style="--tc:#c8b6f2"><div class="gc-head"><span class="tag">GIVE BACK</span></div><div class="gc-art">${ART.icon('charity', 100)}</div>
+        <h2>Donate ${peso(pend.amount)}?</h2><p class="blurb">That is 10% of your income. In return you roll 2 dice for your next 3 turns.</p>
+        <div class="grid2"><button class="good" ${p.cash < pend.amount ? 'disabled' : ''} onclick="send({t:'donate'})">Donate</button><button class="sec" onclick="send({t:'skip_charity'})">Not now</button></div></div>`;
     case 'result':
-      return `<div class="card tone-${pend.tone}" style="border-width:2px"><h2 style="margin-top:0">${esc(pend.title)}</h2><p>${esc(pend.text)}</p>
-        ${pend.lesson ? `<div class="lesson">💡 ${esc(pend.lesson)}</div>` : ''}
-        <button class="big-btn" style="margin-top:12px" onclick="send({t:'end_turn'})">Tapos na ang turn ▶</button></div>`;
+      return resultCardHTML(pend) + `<button class="big-btn" style="margin:12px 0" onclick="send({t:'end_turn'})">End turn ${ART.ui('arrow', 18)}</button><p class="small mute center-t" style="margin:-2px 0 12px">Tip: pay off debts in “My money” before you end your turn.</p>`;
   }
   return '';
 }
 
-function renderEnded(p) {
-  const rank = S.players.slice().sort((a, b) => b.calc.coverage - a.calc.coverage);
-  const pos = rank.findIndex(x => x.id === p.id) + 1;
+function moneyTab(p) {
   const c = p.calc;
+  return `<div class="card"><h3>Monthly income statement</h3>
+      <div class="row"><span>Salary (${esc(p.prof)})</span><b>${peso(p.salary)}</b></div>
+      <div class="row"><span>Passive income</span><b class="good-t">+${peso(c.passive)}</b></div>
+      <div class="row"><span>Taxes</span><span>-${peso(p.taxes)}</span></div>
+      <div class="row"><span>Other expenses</span><span>-${peso(p.other)}</span></div>
+      ${p.children ? `<div class="row"><span>Children (${p.children})</span><span>-${peso(p.children * p.childCost)}</span></div>` : ''}
+      <div class="row"><span>Loan payments</span><span>-${peso(c.liabPay)}</span></div>
+      <div class="row"><b>Monthly cashflow</b><b class="${c.cashflow >= 0 ? 'good-t' : 'bad-t'}">${peso(c.cashflow)}</b></div></div>
+    <div class="card"><h3>Assets</h3>${p.assets.length ? p.assets.map(a => `<div class="row"><div style="display:flex;gap:10px;align-items:center">${ART.icon(a.icon, 40)}<div><b>${esc(a.name)}</b><div class="sub">Loan left ${peso(a.mortgage)}</div></div></div><b class="good-t">+${peso(a.cf)}</b></div>`).join('') : '<p class="mute" style="margin:0">None yet. Find your first asset!</p>'}</div>
+    <div class="card"><h3>Debts</h3>${p.liabs.length ? p.liabs.map(l => `<div class="row"><div><b>${esc(l.name)}</b><div class="sub">Owe ${peso(l.balance)} • pays ${peso(l.pay)}/mo</div></div><button class="sec" ${p.cash < l.balance ? 'disabled' : ''} onclick="send({t:'payoff',id:'${l.id}'})">Pay off</button></div>`).join('') : '<p class="mute" style="margin:0">No debts. Nicely done.</p>'}
+      <p class="small mute" style="margin:10px 0 6px">Need cash? A bank loan costs 10% of the amount every month.</p>
+      <div class="grid2"><button class="sec" onclick="if(confirm('Borrow ₱10,000? You will pay ₱1,000 every month.'))send({t:'loan',amount:10000})">Borrow ₱10K</button><button class="sec" onclick="if(confirm('Borrow ₱50,000? You will pay ₱5,000 every month.'))send({t:'loan',amount:50000})">Borrow ₱50K</button></div></div>
+    <div class="card"><h3>Net worth</h3><div class="row"><span>Cash</span><b>${peso(p.cash)}</b></div><div class="row"><span>Assets (price)</span><b>${peso(c.assetValue)}</b></div><div class="row"><span>Debts and loans</span><b>-${peso(c.debts + c.mortgages)}</b></div><div class="row"><b>Net worth</b><b class="${c.netWorth >= 0 ? 'good-t' : 'bad-t'}">${peso(c.netWorth)}</b></div></div>`;
+}
+
+function logTab() {
+  return `<div class="card"><h3>Game news</h3>${S.log.slice(-25).reverse().map(l => `<div class="logline">${esc(l.msg)}</div>`).join('')}</div>`;
+}
+
+function renderEnded(p) {
+  const rank = rankPlayers(S.players), pos = rank.findIndex(x => x.id === p.id) + 1, c = p.calc;
   const notes = [];
-  if (p.free) notes.push('Nakalabas ka sa rat race. Nagtagumpay ang plano mong palakihin ang passive income.');
-  if (p.stats.doodads > 30000) notes.push(`Gumastos ka ng ${peso(p.stats.doodads)} sa doodads. Ito sana ay pandagdag sa assets.`);
-  if (p.stats.loans > 0) notes.push(`Umutang ka ng ${peso(p.stats.loans)} sa bangko. Tingnan kung nakatulong ba ito o nagpabigat ng expenses.`);
-  if (!p.assets.length) notes.push('Wala kang assets sa dulo. Subukan ang unang maliit na deal sa susunod.');
-  if (!notes.length) notes.push('Magandang laro! Pag-usapan sa grupo kung anong desisyon ang pinaka-nakatulong.');
-  app.innerHTML = `
-    <h1>🏁 Tapos na!</h1>
-    <div class="card"><h2 style="margin:0">#${pos} sa ${S.players.length}</h2>
-      <div class="mute">Passive ${peso(c.passive)} / Expenses ${peso(c.expenses)} (${Math.round(c.coverage * 100)}%)</div>
-      <div class="row"><span>Net worth</span><b>${peso(c.netWorth)}</b></div>
-      <div class="row"><span>Assets na nabili</span><b>${p.stats.deals}</b></div>
-      <div class="row"><span>Nagastos sa doodads</span><b>${peso(p.stats.doodads)}</b></div>
-      <div class="row"><span>Inutang</span><b>${peso(p.stats.loans)}</b></div></div>
-    <div class="card"><h3>Aral para sa iyo</h3>${notes.map(n => `<div class="lesson">${esc(n)}</div>`).join('')}</div>
-    <p class="mute small">Ang mga numero ay pang-laro lang. Sa totoong buhay, mas mababa ang returns at may risk.</p>`;
+  if (p.free) notes.push('You escaped the paycheck race. Your plan to grow passive income worked.');
+  if (p.stats.doodads > 30000) notes.push(`You spent ${peso(p.stats.doodads)} on doodads. Imagine that money working inside an asset instead.`);
+  if (p.stats.loans > 0) notes.push(`You borrowed ${peso(p.stats.loans)} from the bank. Did it help you buy assets, or just cover spending?`);
+  if (!p.assets.length) notes.push('You finished without any assets. Next time, try getting your first small deal early.');
+  if (c.coverage > 0.5 && !p.free) notes.push('So close! You built over half of what you need. A few more assets would have set you free.');
+  if (!notes.length) notes.push('Great game! Talk with your group about which decision helped you most.');
+  app.innerHTML = `<div class="hero-logo">${ART.logo(40)}</div>
+    <div class="card center-t"><div style="display:grid;place-items:center">${ART.avatar(p.avatar, 100)}</div><h1 style="margin-top:10px">#${pos} of ${S.players.length}</h1>
+      <p class="mute">Freedom score <b class="gold-t">${Math.round(c.coverage * 100)}%</b></p></div>
+    <div class="card"><div class="row"><span>Passive income</span><b class="good-t">${peso(c.passive)}</b></div><div class="row"><span>Expenses</span><b>${peso(c.expenses)}</b></div><div class="row"><span>Net worth</span><b>${peso(c.netWorth)}</b></div><div class="row"><span>Assets bought</span><b>${p.stats.deals}</b></div><div class="row"><span>Doodads</span><b>${peso(p.stats.doodads)}</b></div><div class="row"><span>Borrowed</span><b>${peso(p.stats.loans)}</b></div></div>
+    <div class="card"><h3>Your takeaways</h3>${notes.map(n => `<div class="lesson" style="margin-top:8px">${esc(n)}</div>`).join('')}</div>
+    <p class="small mute center-t">Game numbers are not real life. Real returns are lower and investing carries risk.</p>`;
 }
 </script>
 </body>

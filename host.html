@@ -1,62 +1,74 @@
 <!doctype html>
-<html lang="tl">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AHON! Host</title>
+<link rel="icon" href="icon.svg">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="app"></div>
+<script src="art.js"></script>
+<script src="sfx.js"></script>
 <script src="common.js"></script>
 <script>
-let S = null, code = null, lastRollSeq = 0, net;
+let S = null, net, lastEvt = 0, lastRollSeq = -1, lastTurnKey = '', soundOn = true;
 const app = document.getElementById('app');
 const saved = (() => { try { return JSON.parse(sessionStorage.getItem('ahon_host') || 'null'); } catch { return null; } })();
+const shown = {};          // animated (displayed) board position per player
+let moving = false, tickTimer = null;
 
 net = connectWS({
   open() { saved ? net.send({ t: 'host_resume', code: saved.code, hostKey: saved.hostKey }) : net.send({ t: 'host_create' }); },
   message(m) {
-    if (m.t === 'hosted') { code = m.code; sessionStorage.setItem('ahon_host', JSON.stringify({ code: m.code, hostKey: m.hostKey })); }
+    if (m.t === 'hosted') sessionStorage.setItem('ahon_host', JSON.stringify({ code: m.code, hostKey: m.hostKey }));
     else if (m.t === 'host_invalid') { sessionStorage.removeItem('ahon_host'); location.reload(); }
-    else if (m.t === 'state') { S = m; render(); }
+    else if (m.t === 'state') { const prev = S; S = m; onState(prev); }
   }
 });
 const send = o => net.send(o);
+document.addEventListener('click', () => SFX.unlock(), { once: true });
 
-function render() {
-  if (S.state === 'lobby') return renderLobby();
-  if (S.state === 'ended') return renderEnded();
-  renderGame();
+function toggleSound() { soundOn = !soundOn; SFX.setEnabled(soundOn); SFX.unlock(); render(); }
+function toggleFull() { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); }
+
+/* ---------- state change + effects ---------- */
+function onState(prev) {
+  // sound / particle events
+  if (S.evt && S.evt.n !== lastEvt) {
+    const first = lastEvt === 0 && !prev;
+    lastEvt = S.evt.n;
+    if (!first) playEvent(S.evt);
+  }
+  // timer needs a clock offset between server and host
+  S._skew = (S.now || Date.now()) - Date.now();
+  // turn chime
+  const key = S.turn ? S.turn.pid + '|' + S.round : '';
+  if (key && key !== lastTurnKey && S.state === 'playing') SFX.turn();
+  lastTurnKey = key;
+  render();
+  animateTokens();
 }
 
-function joinUrl() { return `${location.origin}/play.html?room=${S.code}`; }
-
-function renderLobby() {
-  const focus = document.activeElement && document.activeElement.id;
-  app.innerHTML = `<div class="lobby">
-    <div>
-      <h1 style="font-size:clamp(28px,4vw,54px);margin:0">🪜 AHON!</h1>
-      <p class="mute" style="font-size:1.2rem">Landas tungo sa kalayaan sa pera. Palakihin ang passive income hanggang lampas na ito sa expenses.</p>
-      <div class="mute">Room code</div><div class="code">${esc(S.code)}</div>
-      <p class="mute">Buksan ang <b>${esc(location.host)}/play.html</b> sa phone o i-scan ang QR.</p>
-      <img class="qr" alt="QR" src="/qr?text=${encodeURIComponent(joinUrl())}">
-    </div>
-    <div class="card">
-      <h2 style="margin-top:0">Mga manlalaro (${S.players.length}/8)</h2>
-      ${S.players.length ? S.players.map(p => `<div class="row"><span><span class="dot" style="background:${p.color}"></span>${esc(p.name)}${p.bot ? ' 🤖' : ''} ${!p.bot && !p.connected ? '<span class="pill">offline</span>' : ''}</span>
-        <button class="sec" onclick="send({t:'remove_player',pid:'${p.id}'})">✕</button></div>`).join('') : '<p class="mute">Wala pang sumali…</p>'}
-      <div class="stack" style="margin-top:14px">
-        <label class="mute">Bilang ng rounds (mga 25 = ~45 min)
-          <input id="rounds" type="number" min="5" max="60" value="${S.maxRounds}" onchange="send({t:'set_rounds',value:this.value})"></label>
-        <div class="grid2"><button class="sec" onclick="send({t:'add_bot'})">+ Bot (pang-test)</button>
-          <button class="good" ${S.players.length ? '' : 'disabled'} onclick="send({t:'start',maxRounds:document.getElementById('rounds').value})">▶ Simulan</button></div>
-        <p class="mute small">Kailangan ng hindi bababa sa 1 manlalaro. Mas masaya ang 3 hanggang 6.</p>
-      </div>
-    </div></div>`;
-  if (focus) { const el = document.getElementById(focus); el && el.focus(); }
+function playEvent(e) {
+  const pos = tokenScreenPos(e.pid);
+  switch (e.type) {
+    case 'join': SFX.join(); break;
+    case 'payday': SFX.payday(); if (e.amount > 0) FX.coins(pos.x, pos.y); break;
+    case 'buy': SFX.buy(); FX.coins(pos.x, pos.y); break;
+    case 'sell': SFX.sell(); FX.coins(pos.x, pos.y); break;
+    case 'doodad': case 'baby': case 'downsized': SFX.bad(); FX.smoke(pos.x, pos.y); break;
+    case 'card': SFX.card(); break;
+    case 'escape': SFX.win(); FX.confetti(); break;
+    case 'start': SFX.win(); break;
+    case 'end': SFX.win(); FX.confetti(); break;
+    case 'donate': SFX.coin(); break;
+    case 'loan': case 'payoff': SFX.coin(); break;
+  }
 }
 
+/* ---------- board geometry ---------- */
 function boardPositions() {
   const pos = [];
   for (let c = 0; c < 7; c++) pos.push([0, c]);
@@ -65,107 +77,228 @@ function boardPositions() {
   for (let r = 5; r >= 1; r--) pos.push([r, 0]);
   return pos;
 }
+const POS = boardPositions();
 
-function dieFace(n) { return `<div class="die">${n}</div>`; }
+function tokenXY(idx, slot, total) {
+  const [r, c] = POS[idx];
+  const off = total > 1 ? (slot - (total - 1) / 2) * 3.2 : 0;
+  return { left: (c + .5) * 100 / 7 + off, top: (r + .5) * 100 / 7 + (total > 1 ? (slot % 2 ? 1.6 : -1.6) : 0) };
+}
+function tokenScreenPos(pid) {
+  const el = pid && document.querySelector(`.token[data-id="${pid}"]`);
+  if (!el) return { x: innerWidth / 2, y: innerHeight / 2 };
+  const b = el.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+}
 
-function centerContent() {
+function animateTokens() {
+  if (!S || S.state !== 'playing' || moving) return;
+  const tgt = {}; S.players.forEach(p => tgt[p.id] = p.pos);
+  const n = S.board.length;
+  const todo = S.players.filter(p => shown[p.id] != null && shown[p.id] !== p.pos);
+  S.players.forEach(p => { if (shown[p.id] == null) shown[p.id] = p.pos; });
+  if (!todo.length) return layoutTokens();
+  moving = true;
+  (function step() {
+    let any = false;
+    todo.forEach(p => { if (shown[p.id] !== tgt[p.id]) { shown[p.id] = (shown[p.id] + 1) % n; any = true; const el = document.querySelector(`.token[data-id="${p.id}"]`); el && (el.classList.remove('hop'), void el.offsetWidth, el.classList.add('hop')); } });
+    layoutTokens(); if (any) SFX.step();
+    if (any) tickTimer = setTimeout(step, 270); else { moving = false; render(); }
+  })();
+}
+
+function layoutTokens() {
+  const byCell = {};
+  S.players.forEach(p => { const i = shown[p.id] != null ? shown[p.id] : p.pos; (byCell[i] = byCell[i] || []).push(p); });
+  Object.entries(byCell).forEach(([i, list]) => list.forEach((p, slot) => {
+    const el = document.querySelector(`.token[data-id="${p.id}"]`); if (!el) return;
+    const xy = tokenXY(+i, slot, list.length); el.style.left = xy.left + '%'; el.style.top = xy.top + '%';
+  }));
+}
+
+/* ---------- screens ---------- */
+function render() {
+  if (!S) return;
+  if (S.state === 'lobby') return renderLobby();
+  if (S.state === 'ended') return renderEnded();
+  renderGame();
+}
+const joinUrl = () => `${location.origin}/play.html?room=${S.code}`;
+
+function topbar(extra) {
+  return `<div class="topbar"><div class="left">${ART.logo(40)}</div>
+    <div class="right">${extra || ''}
+      <button class="ghost" onclick="toggleSound()" title="Sound">${ART.ui(soundOn ? 'volume' : 'mute', 20)}</button>
+      <button class="ghost" onclick="toggleFull()" title="Fullscreen">${ART.ui('expand', 20)}</button></div></div>`;
+}
+
+let lobbyKey = '';
+function renderLobby() {
+  const key = JSON.stringify([S.code, S.players.map(p => [p.id, p.name, p.avatar, p.connected]), S.settings]);
+  if (key === lobbyKey) return; lobbyKey = key;
+  const focus = document.activeElement && document.activeElement.id;
+  const timers = [[0, 'Off'], [30, '30 s'], [45, '45 s'], [60, '60 s'], [90, '90 s'], [120, '2 min']];
+  app.innerHTML = topbar() + `<div class="lobby">
+    <div>
+      <h1 style="font-size:clamp(36px,4.4vw,62px);line-height:1.02;margin-bottom:12px">Climb out of the<br><span style="background:linear-gradient(transparent 62%,var(--mustard) 62%)">paycheck race.</span></h1>
+      <p style="font-size:1.12rem;max-width:560px;line-height:1.5;color:var(--ink2)">Build assets, dodge doodads and grow your passive income until it covers your expenses. First to freedom wins.</p>
+      <div style="display:flex;gap:26px;align-items:center;flex-wrap:wrap;margin-top:22px">
+        <div><div class="mute small" style="font-weight:800;letter-spacing:.14em;margin-bottom:6px">ROOM CODE</div><div class="code">${esc(S.code)}</div></div>
+        <div class="qrbox"><img alt="Scan to join" src="/qr?text=${encodeURIComponent(joinUrl())}"></div>
+      </div>
+      <p class="mute" style="margin-top:14px">Scan the QR or go to <b style="color:var(--ink)">${esc(location.host)}/play.html</b> on your phone and enter the code.</p>
+      <div class="steps">
+        <div class="step"><i>1</i><span>Everyone joins on their phone and picks a character.</span></div>
+        <div class="step"><i>2</i><span>Roll, decide, learn. Your phone is your wallet and your controller.</span></div>
+        <div class="step"><i>3</i><span>Discuss the debrief together at the end.</span></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center"><h2>Players <span class="mute">${S.players.length}/8</span></h2><button class="sec" onclick="send({t:'add_bot'})">${ART.ui('bot', 18)} Add bot</button></div>
+      <div class="joinlist">${S.players.length ? S.players.map(p => `<div class="joiner">
+        <button class="sec x" title="Remove" onclick="send({t:'remove_player',pid:'${p.id}'})">${ART.ui('close', 14)}</button>${ART.avatar(p.avatar, 68)}<b>${esc(p.name)}</b>
+        <span class="mute small">${p.bot ? 'Bot' : p.connected ? 'Ready' : 'Offline'}</span></div>`).join('') : '<p class="mute" style="grid-column:1/-1">Waiting for players to join…</p>'}</div>
+      <div class="settings">
+        <label>Game length
+          <select id="rounds" onchange="send({t:'set_rounds',value:this.value})">${[10, 15, 20, 25, 30, 40].map(v => `<option value="${v}" ${S.settings.maxRounds === v ? 'selected' : ''}>${v} rounds (about ${Math.round(v * 1.8)} min)</option>`).join('')}</select></label>
+        <label>Turn timer
+          <select id="timer" onchange="send({t:'set_timer',value:this.value})">${timers.map(([v, l]) => `<option value="${v}" ${S.settings.timer === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      </div>
+      <button class="good big-btn" style="margin-top:18px" ${S.players.length ? '' : 'disabled'} onclick="SFX.unlock();send({t:'start'})">${ART.ui('play', 18)} Start game</button>
+      <p class="mute small center-t" style="margin-top:10px">Works best with 3 to 6 players. Add bots to test solo.</p>
+    </div></div>`;
+  if (focus) { const el = document.getElementById(focus); el && el.focus(); }
+}
+
+function centerStage() {
   const t = S.turn;
   const cur = t && S.players.find(p => p.id === t.pid);
-  if (!t || !cur) return '<h2>…</h2>';
-  const pend = t.pending;
-  const roll = t.lastRoll;
+  if (!t || !cur) return '<div class="wait">…</div>';
+  const pend = t.pending, roll = t.lastRoll;
   const rolled = roll && roll.n !== lastRollSeq;
   if (roll) lastRollSeq = roll.n;
+  const dice = roll && roll.pid === cur.id ? `<div class="dice">${roll.dice.map(d => dieHTML(d, rolled)).join('')}</div>` : '';
   let body = '';
-  if (t.phase === 'roll') body = `<div class="txt mute">Naghihintay mag-roll si <b style="color:${cur.color}">${esc(cur.name)}</b>…</div>`;
+  if (t.phase === 'roll') body = `<div class="wait"><div class="die-wrap">${dice}</div>Waiting for <b style="color:${cur.color}">${esc(cur.name)}</b> to roll…</div>`;
   else if (pend) {
-    if (pend.kind === 'opp_choice') body = `<div class="txt">🎯 <b>Oportunidad!</b> Pumipili si ${esc(cur.name)} ng small o big deal.</div>`;
-    if (pend.kind === 'deal') { const c = pend.card; body = `<h2>${esc(c.name)}</h2><div class="txt">${esc(c.blurb)}</div>
-      <div class="txt">Presyo <b>${peso(c.cost)}</b> • Down <b>${peso(c.down)}</b> • Utang ${peso(c.mortgage)}</div>
-      <div class="txt good-t"><b>+${peso(c.cf)}</b> passive income / buwan</div>`; }
-    if (pend.kind === 'market') body = `<h2>📈 Market</h2><div class="txt">${esc(pend.card.text)}</div><div class="txt mute">Nag-iisip si ${esc(cur.name)} kung magbebenta.</div>`;
-    if (pend.kind === 'charity') body = `<h2>🤝 Tulong</h2><div class="txt">Mag-do-donate ba si ${esc(cur.name)} ng ${peso(pend.amount)}?</div>`;
-    if (pend.kind === 'result') body = `<h2>${esc(pend.title)}</h2><div class="txt">${esc(pend.text)}</div>${pend.lesson ? `<div class="lesson txt">💡 ${esc(pend.lesson)}</div>` : ''}`;
+    if (pend.kind === 'opp_choice') body = `<div class="wait"><div class="gc-art" style="--tc:#ffd24d">${ART.icon('opp', 110)}</div><span class="head">Opportunity</span>${esc(cur.name)} is choosing a small or big deal…</div>`;
+    else if (pend.kind === 'deal') body = dealCardHTML(pend.card, pend.size);
+    else if (pend.kind === 'market') body = marketCardHTML(pend, false);
+    else if (pend.kind === 'charity') body = `<div class="wait"><div class="gc-art" style="--tc:#a78bfa">${ART.icon('charity', 100)}</div><span class="head">Give Back</span>Will ${esc(cur.name)} donate ${peso(pend.amount)} for bonus rolls?</div>`;
+    else if (pend.kind === 'result') body = resultCardHTML(pend);
   }
-  const dice = roll && roll.pid === cur.id ? `<div class="dice">${roll.dice.map(d => `<div class="die ${rolled ? 'roll' : ''}">${d}</div>`).join('')}</div>` : '';
-  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
-      <div style="font-size:clamp(16px,2vw,26px)"><span class="dot" style="background:${cur.color}"></span><b>${esc(cur.name)}</b> <span class="mute">${cur.emoji} ${esc(cur.prof)}</span></div>${dice}</div>${body}`;
+  return `<div class="who">${ART.avatar(cur.avatar, 54)}<div><b>${esc(cur.name)}</b><span class="mute">${esc(cur.prof)} • ${peso(cur.cash)} cash</span></div><div style="margin-left:auto">${dice && t.phase !== 'roll' ? dice : ''}</div></div><div class="body">${body}</div>`;
 }
 
+let gameKey = '';
 function renderGame() {
-  const pos = boardPositions();
   const t = S.turn;
-  let cells = S.board.map((type, i) => {
-    const sp = SPACES[type], [r, c] = pos[i];
-    const here = S.players.filter(p => p.pos === i);
-    return `<div class="cell" style="grid-row:${r + 1};grid-column:${c + 1};background:${sp.c}"><span class="em">${sp.e}</span>${sp.n}
-      <div class="tokens">${here.map(p => `<span class="tok ${t && t.pid === p.id ? 'cur' : ''}" style="background:${p.color}" title="${esc(p.name)}"></span>`).join('')}</div></div>`;
+  const cells = S.board.map((type, i) => {
+    const sp = SPACES[type], [r, c] = POS[i];
+    const cur = t && S.players.find(p => p.id === t.pid && p.pos === i);
+    return `<div class="cell ${cur ? 'cur' : ''}" style="grid-row:${r + 1};grid-column:${c + 1};--c1:${sp.c1};--c2:${sp.c2}">${i === 0 ? '<span class="start">START</span>' : ''}${ART.icon(type)}<span class="nm">${sp.n}</span></div>`;
   }).join('');
-  const pl = S.players.map(p => {
+  const toks = S.players.map(p => `<div class="token ${t && t.pid === p.id ? 'cur' : ''}" data-id="${p.id}" style="left:${(POS[p.pos][1] + .5) * 100 / 7}%;top:${(POS[p.pos][0] + .5) * 100 / 7}%">${ART.avatar(p.avatar)}</div>`).join('');
+  const ranked = rankPlayers(S.players);
+  const plist = ranked.map(p => {
     const c = p.calc, pct = Math.min(100, Math.round(c.coverage * 100));
-    return `<div class="pc ${t && t.pid === p.id ? 'cur' : ''}"><div class="top"><span><span class="dot" style="background:${p.color}"></span><b>${esc(p.name)}</b> ${p.free ? '🏆' : ''}${!p.connected && !p.bot ? ' <span class="pill">offline</span>' : ''}</span>
-      <span class="mute small">${p.emoji} ${esc(p.prof)}</span></div>
-      <div class="bar" style="margin:6px 0"><i style="width:${pct}%"></i></div>
-      <div class="small mute">Passive ${peso(c.passive)} / Exp ${peso(c.expenses)} (${Math.round(c.coverage * 100)}%) • Cash <b style="color:var(--ink)">${peso(p.cash)}</b> • ${p.assets.length} assets</div></div>`;
+    return `<div class="pc ${t && t.pid === p.id ? 'cur' : ''}">${ART.avatar(p.avatar, 48)}<div>
+      <div class="top"><b>${esc(p.name)}${p.free ? '<span class="gold-t">' + ART.ui('trophy', 16) + '</span>' : ''}</b><span class="mute small">${esc(p.prof)}${!p.connected && !p.bot ? ' • offline' : ''}</span></div>
+      <div class="bar" style="margin-top:5px"><i style="width:${pct}%"></i></div>
+      <div class="nums"><span>Freedom <b>${Math.round(c.coverage * 100)}%</b></span><span>Cash <b>${compact(p.cash)}</b></span><span>Passive <b class="good-t">${compact(c.passive)}</b></span><span>Assets <b>${p.assets.length}</b></span></div></div></div>`;
   }).join('');
   const logs = S.log.slice(-14).reverse().map(l => `<div class="logline">${esc(l.msg)}</div>`).join('');
-  const keep = document.querySelector('.logbox'), scroll = keep ? keep.scrollTop : 0;
-  app.innerHTML = `<div class="host">
-    <div class="left"><div class="board">${cells}<div class="center">${centerContent()}</div></div></div>
-    <div class="right">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div><b>Room ${esc(S.code)}</b> <span class="pill">Round ${Math.min(S.round, S.maxRounds)}/${S.maxRounds}</span></div>
-        <div><button class="sec" onclick="send({t:'skip_turn'})">Laktawan ang turn</button>
-        <button class="sec" onclick="if(confirm('Tapusin ang laro at ipakita ang debrief?'))send({t:'end_game'})">Tapusin</button></div>
-      </div>
-      <div class="ptable">${pl}</div>
-      <div class="logbox">${logs}</div>
-    </div></div>`;
-  const nb = document.querySelector('.logbox'); if (nb) nb.scrollTop = scroll;
+  const old = document.querySelector('.logbox'), scroll = old ? old.scrollTop : 0;
+  const stageEl = document.querySelector('.stage');
+  const stageHTML = centerStage();
+  const first = !document.querySelector('.board');
+  if (first) {
+    app.innerHTML = topbar(`<span class="pill" id="rnd"></span><span class="pill timerpill" id="timerpill" style="display:none"></span>
+      <button class="sec" onclick="send({t:'skip_turn'})">Skip turn</button>
+      <button class="sec" onclick="if(confirm('End the game and show the debrief?'))send({t:'end_game'})">End game</button>`) + `<div class="host">
+      <div class="boardwrap"><div class="board" id="board"></div></div>
+      <div class="side"><div class="plist" id="plist"></div><div class="logbox" id="logbox"></div></div></div>`;
+  }
+  const board = document.getElementById('board');
+  const sig = stageHTML;
+  if (first || board.dataset.cells !== S.board.join()) { board.dataset.cells = S.board.join(); board.innerHTML = cells + `<div class="stage" id="stage"></div><div class="tokens" id="tokens"></div>`; gameKey = ''; }
+  document.getElementById('tokens').innerHTML = toks;
+  // refresh current cell highlight without rebuilding stage
+  [...board.querySelectorAll('.cell')].forEach((el, i) => el.classList.toggle('cur', !!(t && S.players.find(p => p.id === t.pid && p.pos === i))));
+  const stage = document.getElementById('stage');
+  if (gameKey !== sig) { stage.innerHTML = sig; gameKey = sig; }
+  document.getElementById('plist').innerHTML = plist;
+  const lb = document.getElementById('logbox'); lb.innerHTML = logs; lb.scrollTop = scroll;
+  document.getElementById('rnd').textContent = `Round ${Math.min(S.round, S.settings.maxRounds)} / ${S.settings.maxRounds}`;
+  layoutTokens();
+  startClock();
 }
 
+function startClock() {
+  clearInterval(window._clock);
+  const pill = document.getElementById('timerpill');
+  if (!pill) return;
+  const dl = S.turn && S.turn.deadline;
+  if (!dl) { pill.style.display = 'none'; return; }
+  pill.style.display = 'inline-flex';
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((dl - (Date.now() + (S._skew || 0))) / 1000));
+    pill.innerHTML = ART.ui('timer', 16) + ' ' + left + 's'; pill.classList.toggle('urgent', left <= 10);
+    if (left <= 5 && left > 0) SFX.tick();
+  };
+  tick(); window._clock = setInterval(tick, 1000);
+}
+
+/* ---------- debrief ---------- */
 function lineChart() {
-  const W = 760, H = 240, pad = 34;
-  const h = S.history; if (h.length < 2) return '';
+  const W = 880, H = 260, pad = 38, h = S.history;
+  if (h.length < 2) return '';
   const maxY = Math.max(100, ...h.flatMap(x => Object.values(x.data).map(d => d.cov)));
-  const X = i => pad + i * (W - pad * 2) / (h.length - 1);
-  const Y = v => H - pad - v * (H - pad * 2) / maxY;
-  const lines = S.players.map(p => {
-    const pts = h.map((x, i) => x.data[p.id] ? `${X(i)},${Y(x.data[p.id].cov)}` : null).filter(Boolean).join(' ');
-    return `<polyline fill="none" stroke="${p.color}" stroke-width="3" points="${pts}"/>`;
-  }).join('');
-  const goal = `<line x1="${pad}" x2="${W - pad}" y1="${Y(100)}" y2="${Y(100)}" stroke="#3ddc97" stroke-dasharray="6 6"/><text x="${W - pad}" y="${Y(100) - 6}" fill="#3ddc97" font-size="12" text-anchor="end">100% = Malaya</text>`;
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px">${goal}${lines}
-    <text x="${pad}" y="16" fill="#9fb0c6" font-size="12">Passive income ÷ expenses (%) kada round</text></svg>`;
+  const X = i => pad + i * (W - pad * 2) / (h.length - 1), Y = v => H - pad - v * (H - pad * 2) / maxY;
+  const grid = [0, 25, 50, 75, 100].filter(v => v <= maxY).map(v => `<line x1="${pad}" x2="${W - pad}" y1="${Y(v)}" y2="${Y(v)}" stroke="rgba(29,36,51,.14)"/><text x="${pad - 6}" y="${Y(v) + 4}" fill="#6b7488" font-size="11" text-anchor="end">${v}%</text>`).join('');
+  const goal = `<line x1="${pad}" x2="${W - pad}" y1="${Y(100)}" y2="${Y(100)}" stroke="#14805f" stroke-width="2" stroke-dasharray="6 6"/><text x="${W - pad}" y="${Y(100) - 6}" fill="#14805f" font-size="12" text-anchor="end" font-weight="700">100% = FREE</text>`;
+  const lines = S.players.map(p => `<polyline fill="none" stroke="${p.color}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" points="${h.map((x, i) => x.data[p.id] ? X(i) + ',' + Y(x.data[p.id].cov) : null).filter(Boolean).join(' ')}"/>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${grid}${goal}${lines}<text x="${pad}" y="14" fill="#6b7488" font-size="12">Passive income ÷ expenses, by round</text></svg>`;
 }
 
+function downloadCSV() {
+  const rows = [['Rank', 'Player', 'Profession', 'Freedom %', 'Passive/mo', 'Expenses/mo', 'Net worth', 'Assets bought', 'Doodads spent', 'Borrowed', 'Donated', 'Escaped round']];
+  rankPlayers(S.players).forEach((p, i) => { const c = p.calc; rows.push([i + 1, p.name, p.prof, Math.round(c.coverage * 100), c.passive, c.expenses, c.netWorth, p.stats.deals, p.stats.doodads, p.stats.loans, p.stats.donated, p.freeRound || '']); });
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `ahon-results-${S.code}.csv`; a.click();
+}
+
+let endedKey = '';
 function renderEnded() {
-  const rank = S.players.slice().sort((a, b) => (b.free - a.free) || (b.calc.coverage - a.calc.coverage));
+  const rank = rankPlayers(S.players);
+  const key = JSON.stringify([S.code, rank.map(p => [p.id, p.calc.coverage])]);
+  if (key === endedKey && document.querySelector('.debrief')) return; endedKey = key; gameKey = '';
   const rows = rank.map((p, i) => {
     const c = p.calc;
-    return `<tr><td>${i + 1}</td><td><span class="dot" style="background:${p.color}"></span><b>${esc(p.name)}</b> ${p.free ? '🏆' : ''}<div class="small mute">${p.emoji} ${esc(p.prof)}</div></td>
-      <td><div class="bar" style="width:120px"><i style="width:${Math.min(100, Math.round(c.coverage * 100))}%"></i></div>${Math.round(c.coverage * 100)}%</td>
+    return `<tr><td>${i + 1}</td><td><div class="pn">${ART.avatar(p.avatar, 36)}<div><b>${esc(p.name)}${p.free ? '<span class="gold-t">' + ART.ui('trophy', 16) + '</span>' : ''}</b><div class="mute small">${esc(p.prof)}</div></div></div></td>
+      <td style="min-width:150px"><div class="bar"><i style="width:${Math.min(100, Math.round(c.coverage * 100))}%"></i></div><span class="small">${Math.round(c.coverage * 100)}%</span></td>
       <td>${peso(c.passive)}</td><td>${peso(c.expenses)}</td><td>${peso(c.netWorth)}</td><td>${p.stats.deals}</td><td>${peso(p.stats.doodads)}</td><td>${peso(p.stats.loans)}</td></tr>`;
   }).join('');
+  const pod = (p, cls, n) => p ? `<div class="pod ${cls}">${ART.avatar(p.avatar)}<b>${esc(p.name)}</b><span class="mute small">${Math.round(p.calc.coverage * 100)}% free</span><div class="block">${n}</div></div>` : '';
   const totDoodad = S.players.reduce((s, p) => s + p.stats.doodads, 0);
-  const reason = { rounds: 'Naubos ang rounds.', allfree: 'Nakalabas na ang lahat.', host: 'Tinapos ng host.', stuck: '' }[S.endReason] || '';
-  app.innerHTML = `<div class="debrief">
-    <h1>🏁 Debrief ${reason ? `<span class="mute small">• ${reason}</span>` : ''}</h1>
-    <table><thead><tr><th>#</th><th>Manlalaro</th><th>Coverage</th><th>Passive</th><th>Expenses</th><th>Net worth</th><th>Assets</th><th>Doodads</th><th>Inutang</th></tr></thead><tbody>${rows}</tbody></table>
-    <h2>Takbo ng bawat manlalaro</h2>${lineChart()}
-    <div class="grid2" style="margin-top:16px">
-      <div class="card"><h3>Mga tanong para sa talakayan</h3><ol class="q">
-        <li>Ano ang unang asset na binili mo at bakit? Naging tama ba ito?</li>
-        <li>Anong doodad ang pinakamasakit gastusin? Ano ang katumbas nito sa totoong buhay?</li>
-        <li>Kailan ka umutang? Pambili ba ng asset o pambayad ng gastos?</li>
-        <li>Anong desisyon mo ang babaguhin mo ngayon, at ano ang gagawin mo sa susunod na buwan sa totoong buhay?</li>
-        <li>Paano mo malalaman kung ang isang "deal" ay sulit o panlilinlang?</li></ol></div>
-      <div class="card"><h3>Mga aral</h3>
-        <div class="lesson">Pagkakaiba ng asset at liability: ang asset ay naglalagay ng pera sa bulsa, ang liability ay kumukuha.</div>
-        <div class="lesson">Pangkalahatang gastos sa doodads ng grupo: <b>${peso(totDoodad)}</b>. Gaano ito kalaki kumpara sa passive income?</div>
-        <div class="lesson">Ang emergency fund (3 hanggang 6 na buwang gastos) ang pananggalang sa pagkawala ng trabaho.</div>
-        <div class="lesson">Para sa laro lang ang mga numero. Sa totoong buhay, mas mababa ang returns at may panganib; kumonsulta sa lisensyadong financial advisor bago mag-invest.</div></div></div>
-    <p><button onclick="send({t:'new_game'})">Maglaro ulit (parehong room)</button></p></div>`;
+  const totPassive = S.players.reduce((s, p) => s + p.calc.passive, 0);
+  const reason = { rounds: 'All rounds played.', allfree: 'Everyone escaped!', host: 'Ended by the host.', stuck: '' }[S.endReason] || '';
+  app.innerHTML = topbar(`<button class="sec" onclick="downloadCSV()">${ART.ui('download', 18)} Results (CSV)</button><button onclick="send({t:'new_game'})">Play again</button>`) + `<div class="debrief">
+    <h1 style="font-size:2.4rem">Debrief <span class="mute" style="font-size:1rem;font-family:var(--body)">${esc(reason)}</span></h1>
+    <div class="podium">${pod(rank[1], 'second', 2)}${pod(rank[0], 'first', 1)}${pod(rank[2], 'third', 3)}</div>
+    <table class="res"><thead><tr><th>#</th><th>Player</th><th>Freedom</th><th>Passive / mo</th><th>Expenses / mo</th><th>Net worth</th><th>Assets</th><th>Doodads</th><th>Borrowed</th></tr></thead><tbody>${rows}</tbody></table>
+    <div class="card" style="margin-top:16px"><h3>Journey of each player</h3>${lineChart()}</div>
+    <div class="cols2">
+      <div class="card"><h3>Discussion questions</h3><ol class="q">
+        <li>What was the first asset you bought, and why? Was it the right one?</li>
+        <li>Which doodad hurt the most? What is its real-life equivalent?</li>
+        <li>When did you borrow? Was the money used for an asset or to cover spending?</li>
+        <li>What would you do differently next time, and what will you do this month in real life?</li>
+        <li>How can you tell if a "deal" is worth it, or too good to be true?</li></ol></div>
+      <div class="card"><h3>Key takeaways</h3>
+        <div class="lesson"><b>Assets vs liabilities</b>Assets put money in your pocket every month. Liabilities take it out.</div>
+        <div class="lesson"><b>The group's doodad bill</b>${peso(totDoodad)} went to doodads, compared with ${peso(totPassive)} a month of passive income built. What could that spending have become?</div>
+        <div class="lesson"><b>Emergency fund</b>3 to 6 months of expenses in cash is what protects you from a layoff or surprise bill.</div>
+        <div class="lesson"><b>Game math is not real life</b>Returns here are higher than reality and every investment carries risk. Speak to a licensed financial adviser before investing.</div></div></div></div>`;
 }
 </script>
 </body>

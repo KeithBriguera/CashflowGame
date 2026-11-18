@@ -17,7 +17,7 @@ function runGame(port, bots, rounds) {
       if (m.t === 'hosted' && !started) {
         started = true;
         for (let i = 0; i < bots; i++) ws.send(JSON.stringify({ t: 'add_bot' }));
-        ws.send(JSON.stringify({ t: 'start', maxRounds: rounds }));
+        ws.send(JSON.stringify({ t: 'set_rounds', value: rounds })); ws.send(JSON.stringify({ t: 'start' }));
       }
       if (m.t === 'state') {
         last = m;

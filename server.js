@@ -13,7 +13,13 @@ const BOT_NAMES = ['Botchok', 'Bot Ana', 'Bot Jun', 'Bot Mika', 'Bot Dodong', 'B
 const MAX_PLAYERS = 8;
 
 const app = express();
-app.use(express.static(path.join(__dirname, 'public')));
+// Serve client files from ./public if it exists, otherwise from the project root (flat upload).
+// Only whitelisted files are served, so server code is never exposed.
+const fs = require('fs');
+const PUB = fs.existsSync(path.join(__dirname, 'public', 'host.html')) ? path.join(__dirname, 'public') : __dirname;
+app.get('/', (_q, r) => r.redirect('/host.html'));
+['host.html', 'play.html', 'common.js', 'style.css'].forEach(f =>
+  app.get('/' + f, (_q, r) => r.sendFile(path.join(PUB, f))));
 app.get('/health', (_q, r) => r.send('ok'));
 app.get('/qr', async (req, res) => {
   try {

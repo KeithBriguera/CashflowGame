@@ -116,7 +116,7 @@ function hud(p) {
   const c = p.calc, pct = Math.min(100, c.coverage * 100), R = 28, circ = 2 * Math.PI * R;
   const flash = lastCash !== null && lastCash !== p.cash ? 'flash' : ''; lastCash = p.cash;
   return `<div class="hud"><div class="ring"><svg class="prog" viewBox="0 0 60 60"><circle cx="30" cy="30" r="${R}" fill="none" stroke="rgba(29,36,51,.15)" stroke-width="4"/><circle cx="30" cy="30" r="${R}" fill="none" stroke="${c.coverage >= 1 ? '#2fae8f' : '#f2b632'}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ * (1 - pct / 100)}" style="transition:stroke-dashoffset .8s"/></svg>${ART.avatar(p.avatar, 52)}</div>
-    <div class="who"><b>${esc(p.name)}</b><span class="mute small">${esc(p.prof)} • Round ${Math.min(S.round, S.settings.maxRounds)}/${S.settings.maxRounds}</span></div>
+    <div class="who"><b>${esc(p.name)}</b><span class="mute small">${esc(p.prof)} • ${S.settings.maxRounds ? `Round ${Math.min(S.round, S.settings.maxRounds)}/${S.settings.maxRounds}` : `Round ${S.round}`}</span></div>
     <div class="cashbox ${flash}"><span class="mute small">Cash</span><b class="${p.cash < 0 ? 'bad-t' : ''}">${peso(p.cash)}</b></div></div>`;
 }
 

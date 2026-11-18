@@ -146,6 +146,8 @@ function snapshot(room) {
   const data = {};
   room.players.forEach(p => { const c = calc(p); data[p.id] = { cov: Math.round(c.coverage * 100), cash: p.cash, passive: c.passive, net: c.netWorth }; });
   room.history.push({ round: room.round, data });
+  // Unlimited games: thin out old snapshots so the debrief chart and memory stay small.
+  if (room.history.length > 120) room.history = room.history.filter((h, i) => i === room.history.length - 1 || i % 2 === 0);
 }
 
 function startGame(room) {
@@ -155,7 +157,7 @@ function startGame(room) {
   room.state = 'playing';
   room.round = 1; room.turnIdx = -1; room.turn = null; room.history = []; room.decks = {}; room.endReason = null;
   room.log = []; room.timerKey = '';
-  log(room, `The game has started! ${room.settings.maxRounds} rounds. Goal: make your passive income cover your expenses.`);
+  log(room, `The game has started! ${room.settings.maxRounds ? room.settings.maxRounds + ' rounds' : 'No round limit'}. Goal: make your passive income cover your expenses.`);
   emit(room, 'start');
   snapshot(room);
   nextTurn(room);
@@ -178,7 +180,7 @@ function nextTurn(room) {
       room.turnIdx = 0;
       snapshot(room);
       room.round++;
-      if (room.round > room.settings.maxRounds) return endGame(room, 'rounds');
+      if (room.settings.maxRounds > 0 && room.round > room.settings.maxRounds) return endGame(room, 'rounds');
     }
     if (room.players.every(x => x.free)) return endGame(room, 'allfree');
     const p = room.players[room.turnIdx];
@@ -413,6 +415,8 @@ function botStep(room) {
 function scheduleBot(room) {
   clearTimeout(room.botTimer);
   if (room.state !== 'playing' || !room.turn) return;
+  // Unlimited games pause while no human is connected, so bots do not loop forever.
+  if (!room.settings.maxRounds && !room.hosts.size && !room.players.some(x => !x.bot && x.connected)) return;
   const p = room.players.find(x => x.id === room.turn.pid);
   if (p && p.bot) room.botTimer = setTimeout(() => botStep(room), BOT_DELAY);
 }
@@ -554,7 +558,7 @@ function onMessage(ws, msg) {
           if (i >= 0) { const [p] = room.players.splice(i, 1); if (p.ws) send(p.ws, { t: 'kicked' }); }
         }
         break;
-      case 'set_rounds': room.settings.maxRounds = Math.max(5, Math.min(60, Number(msg.value) || 25)); break;
+      case 'set_rounds': room.settings.maxRounds = Number(msg.value) === 0 ? 0 : Math.max(5, Math.min(60, Number(msg.value) || 25)); break;
       case 'set_timer': { const v = Number(msg.value); room.settings.timer = TIMER_CHOICES.includes(v) ? v : 0; break; }
       case 'start': if (room.state === 'lobby') startGame(room); break;
       case 'skip_turn':

@@ -159,7 +159,7 @@ function renderLobby() {
         <span class="mute small">${p.bot ? 'Bot' : p.connected ? 'Ready' : 'Offline'}</span></div>`).join('') : '<p class="mute" style="grid-column:1/-1">Waiting for players to join…</p>'}</div>
       <div class="settings">
         <label>Game length
-          <select id="rounds" onchange="send({t:'set_rounds',value:this.value})">${[10, 15, 20, 25, 30, 40].map(v => `<option value="${v}" ${S.settings.maxRounds === v ? 'selected' : ''}>${v} rounds (about ${Math.round(v * 1.8)} min)</option>`).join('')}</select></label>
+          <select id="rounds" onchange="send({t:'set_rounds',value:this.value})">${[10, 15, 20, 25, 30, 40].map(v => `<option value="${v}" ${S.settings.maxRounds === v ? 'selected' : ''}>${v} rounds (about ${Math.round(v * 1.8)} min)</option>`).join('')}<option value="0" ${S.settings.maxRounds === 0 ? 'selected' : ''}>Unlimited (you end the game)</option></select></label>
         <label>Turn timer
           <select id="timer" onchange="send({t:'set_timer',value:this.value})">${timers.map(([v, l]) => `<option value="${v}" ${S.settings.timer === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       </div>
@@ -228,7 +228,7 @@ function renderGame() {
   if (gameKey !== sig) { stage.innerHTML = sig; gameKey = sig; }
   document.getElementById('plist').innerHTML = plist;
   const lb = document.getElementById('logbox'); lb.innerHTML = logs; lb.scrollTop = scroll;
-  document.getElementById('rnd').textContent = `Round ${Math.min(S.round, S.settings.maxRounds)} / ${S.settings.maxRounds}`;
+  document.getElementById('rnd').textContent = (S.settings.maxRounds ? `Round ${Math.min(S.round, S.settings.maxRounds)} / ${S.settings.maxRounds}` : `Round ${S.round}`);
   layoutTokens();
   updateRejoin();
   startClock();

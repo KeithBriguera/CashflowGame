@@ -169,6 +169,16 @@ function renderLobby() {
   if (focus) { const el = document.getElementById(focus); el && el.focus(); }
 }
 
+function tradeHostHTML(tr) {
+  const c = tr.card, seller = S.players.find(p => p.id === tr.sellerId);
+  const left = Math.max(0, tr.deadline - S.now);
+  const offers = tr.offers.map(o => { const b = S.players.find(p => p.id === o.buyerId); return b ? `<div class="off"><span style="display:flex;gap:8px;align-items:center">${ART.avatar(b.avatar, 28)}${esc(b.name)}</span><span>${o.counter != null ? `${peso(o.price)} → counter ${peso(o.counter)}` : peso(o.price)}</span></div>` : ''; }).join('');
+  return `<div class="tr-host"><div class="trade-card" style="margin:0"><span class="tag">DEAL FOR SALE</span><div class="trade-head">${ART.icon(c.icon, 72)}<div><b style="font-size:1.4rem">${esc(c.name)}</b><span class="mute">${seller ? esc(seller.name) + ' is selling' : ''} • Income +${peso(c.cf)} / month • Down payment ${peso(c.down)}</span></div></div>
+    <div class="row"><span>Asking price</span><b>${peso(tr.ask)}</b></div></div>
+    <div class="timerbar"><i style="width:${Math.min(100, left / 90000 * 100)}%;animation:shrink ${left}ms linear forwards"></i></div><style>@keyframes shrink{to{width:0}}</style>
+    <div class="offers">${offers || '<div class="mute">Waiting for offers on the players\' phones…</div>'}</div></div>`;
+}
+
 function centerStage() {
   const t = S.turn;
   const cur = t && S.players.find(p => p.id === t.pid);
@@ -181,7 +191,7 @@ function centerStage() {
   if (t.phase === 'roll') body = `<div class="wait"><div class="die-wrap">${dice}</div>Waiting for <b style="color:${cur.color}">${esc(cur.name)}</b> to roll…</div>`;
   else if (pend) {
     if (pend.kind === 'opp_choice') body = `<div class="wait"><div class="gc-art" style="--tc:#ffd24d">${ART.icon('opp', 110)}</div><span class="head">Opportunity</span>${esc(cur.name)} is choosing a small or big deal…</div>`;
-    else if (pend.kind === 'deal') body = dealCardHTML(pend.card, pend.size);
+    else if (pend.kind === 'deal') body = S.trade ? tradeHostHTML(S.trade) : dealCardHTML(pend.card, pend.size);
     else if (pend.kind === 'market') body = marketCardHTML(pend, false);
     else if (pend.kind === 'charity') body = `<div class="wait"><div class="gc-art" style="--tc:#a78bfa">${ART.icon('charity', 100)}</div><span class="head">Give Back</span>Will ${esc(cur.name)} donate ${peso(pend.amount)} for bonus rolls?</div>`;
     else if (pend.kind === 'result') body = resultCardHTML(pend);

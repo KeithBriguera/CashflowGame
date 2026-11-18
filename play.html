@@ -19,6 +19,7 @@
 <script src="common.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
+let drafts = {};
 let S = null, session = null, net, toastT, joinErr = '', joinOffline = [], tab = 'play', pickAv = null, lastRollSeq = 0, lastCash = null, lastEvt = 0, lastKey = '';
 try { session = JSON.parse(localStorage.getItem('ahon_session') || 'null'); } catch {}
 const app = document.getElementById('app');
@@ -121,6 +122,7 @@ function hud(p) {
 }
 
 function timerBar(t) {
+  if (S.trade) return '';
   if (!t || !t.deadline) return '';
   const total = S.settings.timer * 1000, left = Math.max(0, t.deadline - (Date.now() + (S.now - Date.now())));
   return `<div class="timerbar"><i style="width:${Math.min(100, left / total * 100)}%;animation:shrink ${left}ms linear forwards"></i></div><style>@keyframes shrink{to{width:0}}</style>`;
@@ -133,7 +135,7 @@ function renderGame(p) {
   if (tab === 'play') body = playTab(p, mine, cur);
   else if (tab === 'money') body = moneyTab(p);
   else body = logTab();
-  app.innerHTML = hud(p) + body + `<div class="tabs"><div class="in">
+  app.innerHTML = hud(p) + buyerTrade(p) + body + `<div class="tabs"><div class="in">
     ${[['play', 'dice', 'Play'], ['money', 'wallet', 'My money'], ['log', 'news', 'News']].map(([k, e, l]) => `<button class="${tab === k ? 'on' : ''}" onclick="tab='${k}';render()">${ART.ui(e, 22)}${l}</button>`).join('')}
     <button onclick="openGlossary()">${ART.ui('book', 22)}Terms</button></div></div>`;
 }
@@ -184,6 +186,58 @@ function openFreedom() {
     <div class="card">${done ? `<h3>You are free</h3><p class="small" style="margin:0">Your assets pay all your bills with ${peso(quit)} to spare each month. Work becomes a choice.</p>` : `<h3>What is missing</h3><p class="small" style="margin:0">You need <b>${peso(gap)}</b> more passive income a month to cover your bills without a paycheck. Every asset you add closes the gap. Pay off debts to lower your expenses too.</p>`}</div></div></div>`;
 }
 
+const bump = (key, d, min, max, def) => { drafts[key] = Math.max(min, Math.min(max, (drafts[key] ?? def) + d)); render(); };
+const stepper = (key, min, max, def, step = 500) => `<div class="stepper"><button class="sec" onclick="bump('${key}',${-step},${min},${max},${def})">−</button><b>${peso(drafts[key] ?? def)}</b><button class="sec" onclick="bump('${key}',${step},${min},${max},${def})">+</button></div>`;
+const r500 = n => Math.max(500, Math.round(n / 500) * 500);
+const tradeBar = tr => { const left = Math.max(0, tr.deadline - S.now); return `<div class="timerbar"><i style="width:${Math.min(100, left / 90000 * 100)}%;animation:shrink ${left}ms linear forwards"></i></div><style>@keyframes shrink{to{width:0}}</style>`; };
+
+function sellSetup(c) {
+  const def = r500(c.cf * 1.2), v = drafts.ask ?? def;
+  return `<div class="card" style="margin-top:12px"><h3>Sell this deal</h3>
+    <p class="small mute" style="margin:0">Set your asking price. The buyer pays you this price and also pays the ${peso(c.down)} down payment. Others can make offers and you can counter.</p>
+    ${stepper('ask', 500, c.cost, def)}
+    <p class="small mute" style="margin:0 0 10px">This deal brings in ${peso(c.cf)} a month. A fair price is about one to two months of that income.</p>
+    <div class="grid2"><button class="good" onclick="send({t:'trade_open',ask:${v}});drafts.setup=0">List for sale</button><button class="sec" onclick="drafts.setup=0;render()">Back</button></div></div>`;
+}
+
+function sellerPanel(p, tr) {
+  const rows = tr.offers.map(o => {
+    const b = S.players.find(x => x.id === o.buyerId); if (!b) return '';
+    const def = r500((o.price + tr.ask) / 2), key = 'ctr:' + o.id;
+    if (o.counter != null) return `<div class="offerrow"><div class="oh"><span style="display:flex;gap:8px;align-items:center">${ART.avatar(b.avatar, 30)}<b>${esc(b.name)}</b></span><b>${peso(o.price)}</b></div><p class="small mute" style="margin:6px 0 0">You countered ${peso(o.counter)}. Waiting for ${esc(b.name)}…</p></div>`;
+    return `<div class="offerrow"><div class="oh"><span style="display:flex;gap:8px;align-items:center">${ART.avatar(b.avatar, 30)}<b>${esc(b.name)}</b></span><b>${peso(o.price)}</b></div>
+      <div class="grid2" style="margin-top:8px"><button class="good" onclick="send({t:'trade_accept',offerId:'${o.id}'})">Accept</button><button class="sec" onclick="send({t:'trade_reject',offerId:'${o.id}'})">Decline</button></div>
+      ${stepper(key, 100, tr.card.cost, def, 500)}<button class="sec big-btn" onclick="send({t:'trade_counter',offerId:'${o.id}',price:${drafts[key] ?? def}})">Counter with ${peso(drafts[key] ?? def)}</button></div>`;
+  }).join('');
+  return `<div class="card trade-card" style="margin-top:12px"><span class="tag">FOR SALE</span>${tradeBar(tr)}
+    <h3 style="margin:8px 0 2px">Asking ${peso(tr.ask)}</h3>
+    <p class="small mute" style="margin:0 0 6px">${tr.offers.length ? 'Offers are coming in. Accept, counter or decline.' : 'Waiting for offers…'}</p>${rows}
+    <button class="sec big-btn" style="margin-top:10px" onclick="send({t:'trade_cancel'})">Take it off the market</button></div>`;
+}
+
+function buyerTrade(p) {
+  const tr = S.trade; if (!tr || tr.sellerId === p.id) return '';
+  const s = S.players.find(x => x.id === tr.sellerId), c = tr.card;
+  const mine = tr.offers.find(o => o.buyerId === p.id);
+  const cost = price => price + c.down, short = price => Math.max(0, cost(price) - p.cash);
+  const note = price => short(price) ? `<p class="small bad-t" style="margin:6px 0 0">Total ${peso(cost(price))} with the down payment. You are ${peso(short(price))} short, so you would borrow (10% a month).</p>` : `<p class="small mute" style="margin:6px 0 0">Total ${peso(cost(price))} with the ${peso(c.down)} down payment.</p>`;
+  let act = '';
+  if (mine && mine.counter != null) {
+    act = `<p style="margin:6px 0"><b>${esc(s.name)}</b> countered with <b>${peso(mine.counter)}</b>.</p>${note(mine.counter)}
+      <div class="grid2" style="margin-top:8px"><button class="good" onclick="send({t:'trade_accept_counter',offerId:'${mine.id}',loan:${short(mine.counter) > 0}})">Accept ${peso(mine.counter)}</button><button class="sec" onclick="send({t:'trade_decline_counter',offerId:'${mine.id}'})">Decline</button></div>`;
+  } else if (mine) {
+    act = `<p style="margin:6px 0">Your offer: <b>${peso(mine.price)}</b>. Waiting for ${esc(s.name)}…</p><button class="sec" onclick="send({t:'trade_withdraw',offerId:'${mine.id}'})">Withdraw offer</button>`;
+  } else {
+    const key = 'offer:' + tr.id, def = r500(tr.ask * 0.6), v = drafts[key] ?? def;
+    act = `<button class="good big-btn" onclick="send({t:'trade_buy',loan:${short(tr.ask) > 0}})">Buy at ${peso(tr.ask)}${short(tr.ask) ? ' + borrow' : ''}</button>${note(tr.ask)}
+      <p class="small mute" style="margin:12px 0 0">Or haggle:</p>${stepper(key, 100, c.cost, def)}
+      <button class="sec big-btn" onclick="send({t:'trade_offer',price:${v},loan:${short(v) > 0}})">Offer ${peso(v)}</button>`;
+  }
+  return `<div class="trade-card"><span class="tag">DEAL FOR SALE</span>${tradeBar(tr)}
+    <div class="trade-head">${ART.icon(c.icon, 56)}<div><b>${esc(c.name)}</b><span class="small mute">Sold by ${esc(s.name)}</span></div></div>
+    <div class="row"><span>Income / month</span><b class="good-t">+${peso(c.cf)}</b></div><div class="row"><span>Down payment</span><b>${peso(c.down)}</b></div><div class="row"><span>Asking price</span><b>${peso(tr.ask)}</b></div>${act}</div>`;
+}
+
 function pendingHTML(p, pend) {
   switch (pend.kind) {
     case 'opp_choice':
@@ -193,8 +247,11 @@ function pendingHTML(p, pend) {
         <div class="grid2"><button onclick="send({t:'choose_deal',size:'small'})">Small deal</button><button class="good" onclick="send({t:'choose_deal',size:'big'})">Big deal</button></div></div>`;
     case 'deal': {
       const c = pend.card, short = Math.max(0, c.down - p.cash), loan = Math.ceil(short / 1000) * 1000;
+      if (S.trade && S.trade.sellerId === p.id) return dealCardHTML(c, pend.size) + sellerPanel(p, S.trade);
+      if (drafts.setup && !pend.tradeUsed) return dealCardHTML(c, pend.size) + sellSetup(c);
       return dealCardHTML(c, pend.size) + `<div class="card" style="margin-top:12px">
         <div class="grid2">${short ? `<button class="sec" onclick="send({t:'buy',loan:true})">Buy + borrow ${compact(loan)}</button>` : `<button class="good" onclick="send({t:'buy'})">Buy it</button>`}<button class="sec" onclick="send({t:'pass'})">Pass</button></div>
+        ${!pend.tradeUsed && S.players.length > 1 ? `<button class="big-btn" style="margin-top:10px;background:var(--teal)" onclick="drafts.setup=1;render()">Sell this deal to other players</button>` : ''}
         ${short ? `<p class="small bad-t" style="margin:10px 0 0">You are ${peso(short)} short. Bank loans cost 10% of the loan every month, so think about whether this deal pays enough.</p>` : `<p class="small mute" style="margin:10px 0 0">After the down payment you will have ${peso(p.cash - c.down)} left.</p>`}</div>`;
     }
     case 'market':

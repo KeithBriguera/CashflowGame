@@ -51,7 +51,8 @@ function createRoom() {
     code: newCode(), hostKey: uid(), hosts: new Set(), created: Date.now(),
     state: 'lobby', players: [], settings: { maxRounds: 25, timer: 0 },
     round: 1, turnIdx: -1, turn: null, log: [], history: [], rollSeq: 0, evtSeq: 0, evt: null,
-    decks: {}, botTimer: null, turnTimer: null, timerKey: '', endReason: null
+    decks: {}, botTimer: null, turnTimer: null, timerKey: '', endReason: null,
+    trade: null, tradeTimer: null, tradeBotTimer: null
   };
   rooms.set(room.code, room);
   return room;
@@ -155,6 +156,7 @@ function startGame(room) {
   const profs = shuffle(C.PROFESSIONS);
   room.players.forEach((p, i) => initPlayer(p, profs[i % profs.length]));
   room.state = 'playing';
+  endTrade(room);
   room.round = 1; room.turnIdx = -1; room.turn = null; room.history = []; room.decks = {}; room.endReason = null;
   room.log = []; room.timerKey = '';
   log(room, `The game has started! ${room.settings.maxRounds ? room.settings.maxRounds + ' rounds' : 'No round limit'}. Goal: make your passive income cover your expenses.`);
@@ -164,6 +166,7 @@ function startGame(room) {
 }
 
 function endGame(room, reason) {
+  endTrade(room);
   room.state = 'ended';
   room.endReason = reason;
   room.turn = null;
@@ -173,6 +176,7 @@ function endGame(room, reason) {
 }
 
 function nextTurn(room) {
+  endTrade(room);
   let guard = 0;
   while (guard++ < room.players.length * 4 + 4) {
     room.turnIdx++;
@@ -283,6 +287,149 @@ function resolveSpace(room, p, space, paydayText) {
   }
 }
 
+/* ---------- deal trading (sell a deal you cannot or will not take) ---------- */
+const TRADE_SECS = 90;
+const r500 = n => Math.max(500, Math.round(n / 500) * 500);
+function tradeTotal(tr, price) { return price + tr.card.down; }
+
+function endTrade(room) {
+  clearTimeout(room.tradeTimer); clearTimeout(room.tradeBotTimer);
+  room.trade = null; room.timerKey = '';
+}
+function cancelTrade(room, why) {
+  if (!room.trade) return;
+  const s = room.players.find(x => x.id === room.trade.sellerId);
+  endTrade(room);
+  if (s) log(room, `${s.name} took ${why === 'expired' ? 'the deal off the market (no takers in time)' : 'the deal off the market'}.`, s.id);
+}
+function runTrade(room, buyer, price) {
+  const tr = room.trade, seller = room.players.find(x => x.id === tr.sellerId), c = tr.card;
+  const total = tradeTotal(tr, price);
+  ensureCash(room, buyer, total);
+  buyer.cash -= total; seller.cash += price;
+  buyer.stats.deals++; seller.stats.brokered = (seller.stats.brokered || 0) + 1; seller.stats.brokerIncome = (seller.stats.brokerIncome || 0) + price;
+  buyer.assets.push({ id: uid(), name: c.name, type: c.type, icon: c.icon, cost: c.cost, mortgage: c.mortgage, cf: c.cf, down: c.down });
+  endTrade(room);
+  emit(room, 'sell', seller.id, { amount: price });
+  log(room, `${seller.name} sold the ${c.name} deal to ${buyer.name} for ${peso(price)}. ${buyer.name} also paid the ${peso(c.down)} down payment.`, seller.id);
+  setResult(room, 'Deal Sold!', `${buyer.name} paid you ${peso(price)} for the right to take ${c.name}. You earned it without spending a peso on the asset.`, 'Finding a good deal has value, even when you cannot fund it yourself. Price it by how much monthly income it brings.', 'good', c.icon);
+}
+function tradeAct(room, p, msg) {
+  const tr = room.trade, t = room.turn;
+  if (msg.t === 'trade_open') {
+    if (tr) return 'A deal is already for sale.';
+    if (!t || t.pid !== p.id || !t.pending || t.pending.kind !== 'deal') return 'You can only sell a deal on your own turn.';
+    if (t.pending.tradeUsed) return 'You already tried to sell this deal.';
+    if (room.players.length < 2) return 'There is nobody to sell to.';
+    const ask = Math.round(Number(msg.ask) / 500) * 500;
+    if (!(ask >= 500 && ask <= t.pending.card.cost)) return `Set an asking price from ${peso(500)} to ${peso(t.pending.card.cost)}.`;
+    t.pending.tradeUsed = true;
+    room.trade = { id: uid(), sellerId: p.id, card: { ...t.pending.card }, size: t.pending.size, ask, offers: [], deadline: Date.now() + TRADE_SECS * 1000, botSeen: {} };
+    clearTimeout(room.turnTimer); t.deadline = room.trade.deadline;
+    room.tradeTimer = setTimeout(() => { if (room.trade) { cancelTrade(room, 'expired'); commit(room); } }, TRADE_SECS * 1000 + 100);
+    log(room, `${p.name} is selling the ${t.pending.card.name} deal. Asking ${peso(ask)}. Make an offer!`, p.id);
+    return null;
+  }
+  if (!tr) return 'That sale is over.';
+  const seller = tr.sellerId === p.id;
+  const off = msg.offerId && tr.offers.find(o => o.id === msg.offerId);
+  switch (msg.t) {
+    case 'trade_cancel':
+      if (!seller) return 'Only the seller can do that.';
+      cancelTrade(room, 'cancel'); return null;
+    case 'trade_buy': {
+      if (seller) return 'You cannot buy your own deal.';
+      if (p.cash < tradeTotal(tr, tr.ask) && !msg.loan) return `Not enough cash. You need ${peso(tradeTotal(tr, tr.ask))}.`;
+      runTrade(room, p, tr.ask); return null;
+    }
+    case 'trade_offer': {
+      if (seller) return 'You cannot bid on your own deal.';
+      const price = Math.round(Number(msg.price) / 100) * 100;
+      if (!(price >= 100 && price <= tr.card.cost)) return 'That offer is out of range.';
+      if (p.cash < tradeTotal(tr, price) && !msg.loan) return `Not enough cash. You need ${peso(tradeTotal(tr, price))}.`;
+      tr.offers = tr.offers.filter(o => o.buyerId !== p.id);
+      tr.offers.push({ id: uid(), buyerId: p.id, price, counter: null, loanOk: !!msg.loan });
+      log(room, `${p.name} offered ${peso(price)} for the ${tr.card.name} deal.`, p.id);
+      return null;
+    }
+    case 'trade_withdraw':
+      if (!off || off.buyerId !== p.id) return 'Offer not found.';
+      tr.offers = tr.offers.filter(o => o !== off); return null;
+    case 'trade_accept': {
+      if (!seller) return 'Only the seller can do that.';
+      if (!off || off.counter != null) return 'Offer not found.';
+      const buyer = room.players.find(x => x.id === off.buyerId);
+      if (!buyer || buyer.cash < tradeTotal(tr, off.price) && !off.loanOk) { tr.offers = tr.offers.filter(o => o !== off); return 'That buyer can no longer afford it.'; }
+      runTrade(room, buyer, off.price); return null;
+    }
+    case 'trade_reject':
+      if (!seller) return 'Only the seller can do that.';
+      if (!off) return 'Offer not found.';
+      tr.offers = tr.offers.filter(o => o !== off);
+      log(room, `${p.name} turned down an offer of ${peso(off.price)}.`, p.id); return null;
+    case 'trade_counter': {
+      if (!seller) return 'Only the seller can do that.';
+      if (!off || off.counter != null) return 'Offer not found.';
+      const price = Math.round(Number(msg.price) / 100) * 100;
+      if (!(price >= 100 && price <= tr.card.cost)) return 'That price is out of range.';
+      off.counter = price;
+      const b = room.players.find(x => x.id === off.buyerId);
+      log(room, `${p.name} countered ${b ? b.name : 'the buyer'} with ${peso(price)}.`, p.id); return null;
+    }
+    case 'trade_accept_counter': {
+      if (!off || off.buyerId !== p.id || off.counter == null) return 'No counter-offer to accept.';
+      if (p.cash < tradeTotal(tr, off.counter) && !msg.loan) return `Not enough cash. You need ${peso(tradeTotal(tr, off.counter))}.`;
+      runTrade(room, p, off.counter); return null;
+    }
+    case 'trade_decline_counter':
+      if (!off || off.buyerId !== p.id) return 'Offer not found.';
+      tr.offers = tr.offers.filter(o => o !== off); return null;
+  }
+  return 'Unknown action.';
+}
+
+/* bots take part in trades */
+function fairFee(card) { return r500(card.cf * 1.1); }
+function tradeBots(room) {
+  const tr = room.trade; if (!tr) return;
+  const seller = room.players.find(x => x.id === tr.sellerId);
+  const fair = fairFee(tr.card);
+  if (seller && seller.bot) {
+    for (const o of tr.offers.slice()) {
+      if (o.counter != null || tr.botSeen['s' + o.id]) continue;
+      tr.botSeen['s' + o.id] = 1;
+      if (o.price >= tr.ask * 0.7 || o.price >= fair) { if (!tradeAct(room, seller, { t: 'trade_accept', offerId: o.id })) return; }
+      else if (o.price < tr.ask * 0.4) tradeAct(room, seller, { t: 'trade_reject', offerId: o.id });
+      else tradeAct(room, seller, { t: 'trade_counter', offerId: o.id, price: r500((o.price + tr.ask) / 2) });
+    }
+  }
+  for (const b of room.players) {
+    if (!b.bot || b.id === tr.sellerId || !room.trade) continue;
+    const mine = tr.offers.find(o => o.buyerId === b.id);
+    if (mine && mine.counter != null && !tr.botSeen['c' + mine.id]) {
+      tr.botSeen['c' + mine.id] = 1;
+      if (mine.counter <= fair && b.cash >= tradeTotal(tr, mine.counter)) { tradeAct(room, b, { t: 'trade_accept_counter', offerId: mine.id }); return; }
+      tradeAct(room, b, { t: 'trade_decline_counter', offerId: mine.id });
+    } else if (!mine && !tr.botSeen['b' + b.id]) {
+      tr.botSeen['b' + b.id] = 1;
+      if (b.cash < tradeTotal(tr, 500) + 2000) continue;
+      if (tr.card.cf < 1000) continue;
+      if (tr.ask <= fair && b.cash >= tradeTotal(tr, tr.ask) + 2000) { tradeAct(room, b, { t: 'trade_buy' }); return; }
+      tradeAct(room, b, { t: 'trade_offer', price: r500(Math.min(tr.ask, fair) * 0.6) });
+    }
+  }
+  // Only bots are left to buy and they have all had their say: close the sale now instead of waiting.
+  const t2 = room.trade;
+  if (t2 && t2.offers.length === 0 && room.players.every(x => x.id === t2.sellerId || (x.bot && t2.botSeen['b' + x.id]))) {
+    cancelTrade(room, 'expired');
+  }
+}
+function scheduleTradeBots(room) {
+  clearTimeout(room.tradeBotTimer);
+  if (!room.trade) return;
+  room.tradeBotTimer = setTimeout(() => { if (room.trade) { tradeBots(room); commit(room); } }, Math.max(BOT_DELAY, 600) + 400);
+}
+
 function act(room, p, msg) {
   if (room.state !== 'playing') return 'The game has not started.';
   switch (msg.t) {
@@ -305,8 +452,10 @@ function act(room, p, msg) {
       return null;
     }
   }
+  if (msg.t && msg.t.startsWith('trade_')) return tradeAct(room, p, msg);
   const t = room.turn;
   if (!t || t.pid !== p.id) return 'It is not your turn yet.';
+  if (room.trade && msg.t !== 'end_turn') return 'Your deal is up for sale. Cancel the sale first.';
   const pend = t.pending;
   switch (msg.t) {
     case 'roll':
@@ -383,7 +532,9 @@ function decideFor(room, p, mode) {
   if (pend.kind === 'opp_choice') return mode === 'auto' ? { t: 'choose_deal', size: 'small' } : { t: 'choose_deal', size: p.cash >= 150000 ? 'big' : 'small' };
   if (pend.kind === 'deal') {
     if (mode === 'auto') return { t: 'pass' };
-    return pend.card.down <= p.cash - 2000 ? { t: 'buy' } : { t: 'pass' };
+    if (pend.card.down <= p.cash - 2000) return { t: 'buy' };
+    if (!pend.tradeUsed && !room.trade && pend.card.cf >= 1500 && room.players.length > 1) return { t: 'trade_open', ask: Math.min(pend.card.cost, fairFee(pend.card) + 500) };
+    return room.trade ? { t: 'noop' } : { t: 'pass' };
   }
   if (pend.kind === 'market') {
     if (mode === 'auto') return { t: 'keep' };
@@ -458,7 +609,7 @@ function view(room, forId) {
   return {
     t: 'state', code: room.code, state: room.state, round: room.round, settings: room.settings,
     board: C.BOARD, endReason: room.endReason, you: forId || null, now: Date.now(),
-    turn: room.turn, evt: room.evt, players: room.players.map(pubPlayer),
+    turn: room.turn, trade: room.trade ? { ...room.trade, botSeen: undefined } : null, evt: room.evt, players: room.players.map(pubPlayer),
     log: room.log.slice(-30), history: room.history
   };
 }
@@ -468,6 +619,8 @@ function send(ws, obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o
 function commit(room) {
   if (room.state === 'playing') room.players.forEach(p => checkFree(room, p));
   armTimer(room);
+  const tsig = room.trade ? room.trade.id + room.trade.offers.map(o => o.id + ':' + o.counter).join(',') : '';
+  if (tsig !== room.tradeSig) { room.tradeSig = tsig; if (tsig) scheduleTradeBots(room); }
   room.hosts.forEach(ws => send(ws, view(room, null)));
   room.players.forEach(p => { if (p.ws) send(p.ws, view(room, p.id)); });
   scheduleBot(room);

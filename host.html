@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="tl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AHON! Host</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app"></div>
+<script src="common.js"></script>
+<script>
+let S = null, code = null, lastRollSeq = 0, net;
+const app = document.getElementById('app');
+const saved = (() => { try { return JSON.parse(sessionStorage.getItem('ahon_host') || 'null'); } catch { return null; } })();
+
+net = connectWS({
+  open() { saved ? net.send({ t: 'host_resume', code: saved.code, hostKey: saved.hostKey }) : net.send({ t: 'host_create' }); },
+  message(m) {
+    if (m.t === 'hosted') { code = m.code; sessionStorage.setItem('ahon_host', JSON.stringify({ code: m.code, hostKey: m.hostKey })); }
+    else if (m.t === 'host_invalid') { sessionStorage.removeItem('ahon_host'); location.reload(); }
+    else if (m.t === 'state') { S = m; render(); }
+  }
+});
+const send = o => net.send(o);
+
+function render() {
+  if (S.state === 'lobby') return renderLobby();
+  if (S.state === 'ended') return renderEnded();
+  renderGame();
+}
+
+function joinUrl() { return `${location.origin}/play.html?room=${S.code}`; }
+
+function renderLobby() {
+  const focus = document.activeElement && document.activeElement.id;
+  app.innerHTML = `<div class="lobby">
+    <div>
+      <h1 style="font-size:clamp(28px,4vw,54px);margin:0">🪜 AHON!</h1>
+      <p class="mute" style="font-size:1.2rem">Landas tungo sa kalayaan sa pera. Palakihin ang passive income hanggang lampas na ito sa expenses.</p>
+      <div class="mute">Room code</div><div class="code">${esc(S.code)}</div>
+      <p class="mute">Buksan ang <b>${esc(location.host)}/play.html</b> sa phone o i-scan ang QR.</p>
+      <img class="qr" alt="QR" src="/qr?text=${encodeURIComponent(joinUrl())}">
+    </div>
+    <div class="card">
+      <h2 style="margin-top:0">Mga manlalaro (${S.players.length}/8)</h2>
+      ${S.players.length ? S.players.map(p => `<div class="row"><span><span class="dot" style="background:${p.color}"></span>${esc(p.name)}${p.bot ? ' 🤖' : ''} ${!p.bot && !p.connected ? '<span class="pill">offline</span>' : ''}</span>
+        <button class="sec" onclick="send({t:'remove_player',pid:'${p.id}'})">✕</button></div>`).join('') : '<p class="mute">Wala pang sumali…</p>'}
+      <div class="stack" style="margin-top:14px">
+        <label class="mute">Bilang ng rounds (mga 25 = ~45 min)
+          <input id="rounds" type="number" min="5" max="60" value="${S.maxRounds}" onchange="send({t:'set_rounds',value:this.value})"></label>
+        <div class="grid2"><button class="sec" onclick="send({t:'add_bot'})">+ Bot (pang-test)</button>
+          <button class="good" ${S.players.length ? '' : 'disabled'} onclick="send({t:'start',maxRounds:document.getElementById('rounds').value})">▶ Simulan</button></div>
+        <p class="mute small">Kailangan ng hindi bababa sa 1 manlalaro. Mas masaya ang 3 hanggang 6.</p>
+      </div>
+    </div></div>`;
+  if (focus) { const el = document.getElementById(focus); el && el.focus(); }
+}
+
+function boardPositions() {
+  const pos = [];
+  for (let c = 0; c < 7; c++) pos.push([0, c]);
+  for (let r = 1; r < 7; r++) pos.push([r, 6]);
+  for (let c = 5; c >= 0; c--) pos.push([6, c]);
+  for (let r = 5; r >= 1; r--) pos.push([r, 0]);
+  return pos;
+}
+
+function dieFace(n) { return `<div class="die">${n}</div>`; }
+
+function centerContent() {
+  const t = S.turn;
+  const cur = t && S.players.find(p => p.id === t.pid);
+  if (!t || !cur) return '<h2>…</h2>';
+  const pend = t.pending;
+  const roll = t.lastRoll;
+  const rolled = roll && roll.n !== lastRollSeq;
+  if (roll) lastRollSeq = roll.n;
+  let body = '';
+  if (t.phase === 'roll') body = `<div class="txt mute">Naghihintay mag-roll si <b style="color:${cur.color}">${esc(cur.name)}</b>…</div>`;
+  else if (pend) {
+    if (pend.kind === 'opp_choice') body = `<div class="txt">🎯 <b>Oportunidad!</b> Pumipili si ${esc(cur.name)} ng small o big deal.</div>`;
+    if (pend.kind === 'deal') { const c = pend.card; body = `<h2>${esc(c.name)}</h2><div class="txt">${esc(c.blurb)}</div>
+      <div class="txt">Presyo <b>${peso(c.cost)}</b> • Down <b>${peso(c.down)}</b> • Utang ${peso(c.mortgage)}</div>
+      <div class="txt good-t"><b>+${peso(c.cf)}</b> passive income / buwan</div>`; }
+    if (pend.kind === 'market') body = `<h2>📈 Market</h2><div class="txt">${esc(pend.card.text)}</div><div class="txt mute">Nag-iisip si ${esc(cur.name)} kung magbebenta.</div>`;
+    if (pend.kind === 'charity') body = `<h2>🤝 Tulong</h2><div class="txt">Mag-do-donate ba si ${esc(cur.name)} ng ${peso(pend.amount)}?</div>`;
+    if (pend.kind === 'result') body = `<h2>${esc(pend.title)}</h2><div class="txt">${esc(pend.text)}</div>${pend.lesson ? `<div class="lesson txt">💡 ${esc(pend.lesson)}</div>` : ''}`;
+  }
+  const dice = roll && roll.pid === cur.id ? `<div class="dice">${roll.dice.map(d => `<div class="die ${rolled ? 'roll' : ''}">${d}</div>`).join('')}</div>` : '';
+  return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <div style="font-size:clamp(16px,2vw,26px)"><span class="dot" style="background:${cur.color}"></span><b>${esc(cur.name)}</b> <span class="mute">${cur.emoji} ${esc(cur.prof)}</span></div>${dice}</div>${body}`;
+}
+
+function renderGame() {
+  const pos = boardPositions();
+  const t = S.turn;
+  let cells = S.board.map((type, i) => {
+    const sp = SPACES[type], [r, c] = pos[i];
+    const here = S.players.filter(p => p.pos === i);
+    return `<div class="cell" style="grid-row:${r + 1};grid-column:${c + 1};background:${sp.c}"><span class="em">${sp.e}</span>${sp.n}
+      <div class="tokens">${here.map(p => `<span class="tok ${t && t.pid === p.id ? 'cur' : ''}" style="background:${p.color}" title="${esc(p.name)}"></span>`).join('')}</div></div>`;
+  }).join('');
+  const pl = S.players.map(p => {
+    const c = p.calc, pct = Math.min(100, Math.round(c.coverage * 100));
+    return `<div class="pc ${t && t.pid === p.id ? 'cur' : ''}"><div class="top"><span><span class="dot" style="background:${p.color}"></span><b>${esc(p.name)}</b> ${p.free ? '🏆' : ''}${!p.connected && !p.bot ? ' <span class="pill">offline</span>' : ''}</span>
+      <span class="mute small">${p.emoji} ${esc(p.prof)}</span></div>
+      <div class="bar" style="margin:6px 0"><i style="width:${pct}%"></i></div>
+      <div class="small mute">Passive ${peso(c.passive)} / Exp ${peso(c.expenses)} (${Math.round(c.coverage * 100)}%) • Cash <b style="color:var(--ink)">${peso(p.cash)}</b> • ${p.assets.length} assets</div></div>`;
+  }).join('');
+  const logs = S.log.slice(-14).reverse().map(l => `<div class="logline">${esc(l.msg)}</div>`).join('');
+  const keep = document.querySelector('.logbox'), scroll = keep ? keep.scrollTop : 0;
+  app.innerHTML = `<div class="host">
+    <div class="left"><div class="board">${cells}<div class="center">${centerContent()}</div></div></div>
+    <div class="right">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><b>Room ${esc(S.code)}</b> <span class="pill">Round ${Math.min(S.round, S.maxRounds)}/${S.maxRounds}</span></div>
+        <div><button class="sec" onclick="send({t:'skip_turn'})">Laktawan ang turn</button>
+        <button class="sec" onclick="if(confirm('Tapusin ang laro at ipakita ang debrief?'))send({t:'end_game'})">Tapusin</button></div>
+      </div>
+      <div class="ptable">${pl}</div>
+      <div class="logbox">${logs}</div>
+    </div></div>`;
+  const nb = document.querySelector('.logbox'); if (nb) nb.scrollTop = scroll;
+}
+
+function lineChart() {
+  const W = 760, H = 240, pad = 34;
+  const h = S.history; if (h.length < 2) return '';
+  const maxY = Math.max(100, ...h.flatMap(x => Object.values(x.data).map(d => d.cov)));
+  const X = i => pad + i * (W - pad * 2) / (h.length - 1);
+  const Y = v => H - pad - v * (H - pad * 2) / maxY;
+  const lines = S.players.map(p => {
+    const pts = h.map((x, i) => x.data[p.id] ? `${X(i)},${Y(x.data[p.id].cov)}` : null).filter(Boolean).join(' ');
+    return `<polyline fill="none" stroke="${p.color}" stroke-width="3" points="${pts}"/>`;
+  }).join('');
+  const goal = `<line x1="${pad}" x2="${W - pad}" y1="${Y(100)}" y2="${Y(100)}" stroke="#3ddc97" stroke-dasharray="6 6"/><text x="${W - pad}" y="${Y(100) - 6}" fill="#3ddc97" font-size="12" text-anchor="end">100% = Malaya</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px">${goal}${lines}
+    <text x="${pad}" y="16" fill="#9fb0c6" font-size="12">Passive income ÷ expenses (%) kada round</text></svg>`;
+}
+
+function renderEnded() {
+  const rank = S.players.slice().sort((a, b) => (b.free - a.free) || (b.calc.coverage - a.calc.coverage));
+  const rows = rank.map((p, i) => {
+    const c = p.calc;
+    return `<tr><td>${i + 1}</td><td><span class="dot" style="background:${p.color}"></span><b>${esc(p.name)}</b> ${p.free ? '🏆' : ''}<div class="small mute">${p.emoji} ${esc(p.prof)}</div></td>
+      <td><div class="bar" style="width:120px"><i style="width:${Math.min(100, Math.round(c.coverage * 100))}%"></i></div>${Math.round(c.coverage * 100)}%</td>
+      <td>${peso(c.passive)}</td><td>${peso(c.expenses)}</td><td>${peso(c.netWorth)}</td><td>${p.stats.deals}</td><td>${peso(p.stats.doodads)}</td><td>${peso(p.stats.loans)}</td></tr>`;
+  }).join('');
+  const totDoodad = S.players.reduce((s, p) => s + p.stats.doodads, 0);
+  const reason = { rounds: 'Naubos ang rounds.', allfree: 'Nakalabas na ang lahat.', host: 'Tinapos ng host.', stuck: '' }[S.endReason] || '';
+  app.innerHTML = `<div class="debrief">
+    <h1>🏁 Debrief ${reason ? `<span class="mute small">• ${reason}</span>` : ''}</h1>
+    <table><thead><tr><th>#</th><th>Manlalaro</th><th>Coverage</th><th>Passive</th><th>Expenses</th><th>Net worth</th><th>Assets</th><th>Doodads</th><th>Inutang</th></tr></thead><tbody>${rows}</tbody></table>
+    <h2>Takbo ng bawat manlalaro</h2>${lineChart()}
+    <div class="grid2" style="margin-top:16px">
+      <div class="card"><h3>Mga tanong para sa talakayan</h3><ol class="q">
+        <li>Ano ang unang asset na binili mo at bakit? Naging tama ba ito?</li>
+        <li>Anong doodad ang pinakamasakit gastusin? Ano ang katumbas nito sa totoong buhay?</li>
+        <li>Kailan ka umutang? Pambili ba ng asset o pambayad ng gastos?</li>
+        <li>Anong desisyon mo ang babaguhin mo ngayon, at ano ang gagawin mo sa susunod na buwan sa totoong buhay?</li>
+        <li>Paano mo malalaman kung ang isang "deal" ay sulit o panlilinlang?</li></ol></div>
+      <div class="card"><h3>Mga aral</h3>
+        <div class="lesson">Pagkakaiba ng asset at liability: ang asset ay naglalagay ng pera sa bulsa, ang liability ay kumukuha.</div>
+        <div class="lesson">Pangkalahatang gastos sa doodads ng grupo: <b>${peso(totDoodad)}</b>. Gaano ito kalaki kumpara sa passive income?</div>
+        <div class="lesson">Ang emergency fund (3 hanggang 6 na buwang gastos) ang pananggalang sa pagkawala ng trabaho.</div>
+        <div class="lesson">Para sa laro lang ang mga numero. Sa totoong buhay, mas mababa ang returns at may panganib; kumonsulta sa lisensyadong financial advisor bago mag-invest.</div></div></div>
+    <p><button onclick="send({t:'new_game'})">Maglaro ulit (parehong room)</button></p></div>`;
+}
+</script>
+</body>
+</html>

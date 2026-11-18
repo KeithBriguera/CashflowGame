@@ -165,8 +165,23 @@ function playTab(p, mine, cur) {
   }
   // quick progress card
   h += `<div class="card"><h3>Road to freedom</h3><div class="bar thick"><i style="width:${Math.min(100, Math.round(c.coverage * 100))}%"></i></div>
-    <p class="small mute" style="margin:8px 0 0">Passive income <b class="good-t">${peso(c.passive)}</b> vs expenses <b>${peso(c.expenses)}</b> a month (${Math.round(c.coverage * 100)}%). Reach 100% to win.</p></div>`;
+    <p class="small mute" style="margin:8px 0 0">Passive income <b class="good-t">${peso(c.passive)}</b> vs expenses <b>${peso(c.expenses)}</b> a month (${Math.round(c.coverage * 100)}%). Reach 100% to win.</p>
+    <button class="ghost" style="margin-top:10px" onclick="openFreedom()">${ART.ui('star', 18)} Preview life outside the race</button></div>`;
   return h;
+}
+
+function openFreedom() {
+  const p = me(), c = p.calc;
+  const gap = Math.max(0, c.expenses - c.passive), done = gap === 0 && c.passive > 0;
+  const quit = c.passive - c.expenses;
+  document.getElementById('overlay').innerHTML = `<div class="sheet-bg" onclick="closeSheet(event)"><div class="sheet"><div style="display:flex;justify-content:space-between;align-items:center"><h2>Outside the race</h2><button class="sec" onclick="closeSheet()">Close</button></div>
+    <p class="mute small">A preview only. Your game goes on as normal.</p>
+    <div class="card"><h3>Your life if you quit your job today</h3>
+      <div class="row"><span>Salary</span><b class="bad-t">${peso(0)}</b></div>
+      <div class="row"><span>Passive income</span><b class="good-t">+${peso(c.passive)}</b></div>
+      <div class="row"><span>Monthly expenses</span><b>-${peso(c.expenses)}</b></div>
+      <div class="row"><b>Monthly result</b><b class="${quit >= 0 ? 'good-t' : 'bad-t'}">${peso(quit)}</b></div></div>
+    <div class="card">${done ? `<h3>You are free</h3><p class="small" style="margin:0">Your assets pay all your bills with ${peso(quit)} to spare each month. Work becomes a choice.</p>` : `<h3>What is missing</h3><p class="small" style="margin:0">You need <b>${peso(gap)}</b> more passive income a month to cover your bills without a paycheck. Every asset you add closes the gap. Pay off debts to lower your expenses too.</p>`}</div></div></div>`;
 }
 
 function pendingHTML(p, pend) {

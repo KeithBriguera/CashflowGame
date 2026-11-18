@@ -216,7 +216,7 @@ function renderGame() {
       <button class="sec" onclick="send({t:'skip_turn'})">Skip turn</button>
       <button class="sec" onclick="if(confirm('End the game and show the debrief?'))send({t:'end_game'})">End game</button>`) + `<div class="host">
       <div class="boardwrap"><div class="board" id="board"></div></div>
-      <div class="side"><div class="plist" id="plist"></div><div class="logbox" id="logbox"></div></div></div>`;
+      <div class="side"><div id="rejoin"></div><div class="plist" id="plist"></div><div class="logbox" id="logbox"></div></div></div>`;
   }
   const board = document.getElementById('board');
   const sig = stageHTML;
@@ -230,8 +230,19 @@ function renderGame() {
   const lb = document.getElementById('logbox'); lb.innerHTML = logs; lb.scrollTop = scroll;
   document.getElementById('rnd').textContent = `Round ${Math.min(S.round, S.settings.maxRounds)} / ${S.settings.maxRounds}`;
   layoutTokens();
+  updateRejoin();
   startClock();
 }
+
+function updateRejoin() {
+  const el = document.getElementById('rejoin'); if (!el) return;
+  const hidden = localStorage.getItem('ahon_qr_hidden') === '1';
+  const key = S.code + '|' + hidden; if (el.dataset.k === key) return; el.dataset.k = key;
+  el.innerHTML = hidden
+    ? `<div class="rejoin slim"><span>${ART.ui('users', 16)} Rejoin QR hidden</span><button class="sec" onclick="toggleRejoin()">Show</button></div>`
+    : `<div class="rejoin"><div class="rj-head"><b>Rejoin QR</b><button class="sec" onclick="toggleRejoin()">Hide</button></div><div class="rj-body"><div class="qrbox sm"><img alt="Rejoin QR" src="/qr?text=${encodeURIComponent(joinUrl())}"></div><div><div class="mute small">Room code</div><div class="rj-code">${esc(S.code)}</div><p class="mute small">Left by accident? Scan this, then tap your name under Rejoin.</p></div></div></div>`;
+}
+function toggleRejoin() { localStorage.setItem('ahon_qr_hidden', localStorage.getItem('ahon_qr_hidden') === '1' ? '0' : '1'); updateRejoin(); }
 
 function startClock() {
   clearInterval(window._clock);

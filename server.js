@@ -513,8 +513,17 @@ function onMessage(ws, msg) {
       const room = rooms.get(String(msg.code || '').trim());
       if (!room) return send(ws, { t: 'join_error', msg: 'No room found with that code.' });
       let p = msg.token && room.players.find(x => x.token === msg.token && !x.bot);
+      if (!p && room.state !== 'lobby') {
+        // Game already running: let a player who dropped out take their seat back by name.
+        const nm = String(msg.name || '').trim().toLowerCase();
+        const cand = nm && room.players.find(x => !x.bot && x.name.toLowerCase() === nm);
+        const offline = room.players.filter(x => !x.bot && !x.connected).map(x => x.name);
+        if (!cand) return send(ws, { t: 'join_error', msg: 'This game has already started. To rejoin, tap your name below.', offline });
+        if (cand.connected) return send(ws, { t: 'join_error', msg: `${cand.name} still shows as connected. Wait a few seconds and try again.`, offline });
+        p = cand; p.token = uid();
+        log(room, `${p.name} is back in the game.`, p.id);
+      }
       if (!p) {
-        if (room.state !== 'lobby') return send(ws, { t: 'join_error', msg: 'This game has already started.' });
         if (room.players.length >= MAX_PLAYERS) return send(ws, { t: 'join_error', msg: 'This room is full (8 players).' });
         const name = String(msg.name || '').trim();
         if (!name) return send(ws, { t: 'join_error', msg: 'Please enter your name.' });

@@ -19,7 +19,7 @@
 <script src="common.js"></script>
 <script>
 const params = new URLSearchParams(location.search);
-let S = null, session = null, net, toastT, joinErr = '', tab = 'play', pickAv = null, lastRollSeq = 0, lastCash = null, lastEvt = 0, lastKey = '';
+let S = null, session = null, net, toastT, joinErr = '', joinOffline = [], tab = 'play', pickAv = null, lastRollSeq = 0, lastCash = null, lastEvt = 0, lastKey = '';
 try { session = JSON.parse(localStorage.getItem('ahon_session') || 'null'); } catch {}
 const app = document.getElementById('app');
 const vib = p => { try { navigator.vibrate && navigator.vibrate(p); } catch {} };
@@ -35,7 +35,7 @@ net = connectWS({
   open() { session && session.token ? net.send({ t: 'join', code: session.code, token: session.token }) : renderJoin(); },
   message(m) {
     if (m.t === 'joined') { session = { code: m.code, token: m.token, pid: m.pid }; localStorage.setItem('ahon_session', JSON.stringify(session)); }
-    else if (m.t === 'join_error') { if (session) { localStorage.removeItem('ahon_session'); session = null; } joinErr = m.msg; renderJoin(); }
+    else if (m.t === 'join_error') { if (session) { localStorage.removeItem('ahon_session'); session = null; } joinErr = m.msg; joinOffline = m.offline || []; renderJoin(); }
     else if (m.t === 'kicked') { localStorage.removeItem('ahon_session'); session = null; S = null; joinErr = 'The host removed you from the room.'; renderJoin(); }
     else if (m.t === 'toast') toast(m.msg);
     else if (m.t === 'state') { S = m; onState(); }
@@ -55,7 +55,9 @@ function renderJoin() {
       <div class="avgrid">${[0, 1, 2, 3, 4, 5, 6, 7].map(i => `<button class="${i === sel ? 'sel' : ''}" onclick="pickAv=${i};renderJoin()">${ART.avatar(i)}</button>`).join('')}</div>
       <button class="big-btn" id="go">Join game</button>
       ${joinErr ? `<div class="bad-t center-t">${esc(joinErr)}</div>` : ''}
-    </div>`;
+    </div>
+    ${joinOffline.length ? `<div class="card"><h3>Rejoin as</h3><div class="rejoinlist">${joinOffline.map(n => `<button class="sec" data-n="${esc(n)}">${esc(n)}</button>`).join('')}</div></div>` : ''}`;
+  document.querySelectorAll('.rejoinlist button').forEach(b => b.onclick = () => { joinErr = ''; net.send({ t: 'join', code: document.getElementById('code').value.trim(), name: b.dataset.n }); });
   const c = sessionStorage.getItem('ahon_code_draft'), n = sessionStorage.getItem('ahon_name_draft');
   if (n) document.getElementById('name').value = n;
   document.getElementById('name').oninput = e => sessionStorage.setItem('ahon_name_draft', e.target.value);
@@ -96,7 +98,7 @@ function render() {
 function renderLobby(p) {
   const taken = new Set(S.players.filter(q => q.id !== p.id).map(q => q.avatar));
   app.innerHTML = `<div class="hero-logo">${ART.logo(46)}</div>
-    <div class="card center-t"><div style="display:grid;place-items:center">${ART.avatar(p.avatar, 96)}</div>
+    <div class="card center-t"><div style="display:grid;place-items:center">${ART.avatar(p.avatar, 76)}</div>
       <h2 style="margin-top:8px">You're in, ${esc(p.name)}!</h2><p class="mute">Room <b class="gold-t">${esc(S.code)}</b>. Waiting for the host to start…</p></div>
     <div class="card"><h3>Change character</h3><div class="avgrid">${[0, 1, 2, 3, 4, 5, 6, 7].map(i => `<button class="${i === p.avatar ? 'sel' : ''}" ${taken.has(i) ? 'disabled' : ''} onclick="send({t:'set_avatar',avatar:${i}})">${ART.avatar(i)}</button>`).join('')}</div></div>
     <div class="card"><h3>Who's here</h3><div style="display:flex;flex-wrap:wrap;gap:8px">${S.players.map(q => `<span class="pill">${ART.avatar(q.avatar, 22)} ${esc(q.name)}</span>`).join('')}</div></div>

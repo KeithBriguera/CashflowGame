@@ -10,12 +10,20 @@ const SPACES = {
   market:    { n: 'Market',      c1: '#4aa3df' },
   charity:   { n: 'Give Back',   c1: '#9a7be0' },
   baby:      { n: 'Baby',        c1: '#f19cc0' },
-  downsized: { n: 'Layoff',      c1: '#9aa3b5' }
+  downsized: { n: 'Layoff',      c1: '#9aa3b5' },
+  payout:    { n: 'Payout',      c1: '#d9a621' },
+  hsdeal:    { n: 'Venture',     c1: '#7a63d6' },
+  windfall:  { n: 'Windfall',    c1: '#2fae8f' },
+  audit:     { n: 'Tax Audit',   c1: '#7f8aa8' },
+  luxury:    { n: 'Luxury',      c1: '#ee6b5b' },
+  dream:     { n: 'Dream Gallery', c1: '#f2b632' }
 };
 const TYPE_LABEL = { property: 'Property', business: 'Business', stock: 'Stocks' };
 const TYPE_COLOR = { property: '#b9a4ee', business: '#ffb27a', stock: '#8ddbc3' };
 
 const GLOSSARY = [
+  ['Dream', 'The big goal you are really working toward: a home, a business, helping your community. Knowing its price turns a wish into a plan.'],
+  ['High Stakes', 'The second stage of the game. Once your passive income covers your expenses, you can quit your job and play for bigger deals and your dream.'],
   ['Passive income', 'Money that comes in every month from assets, without you trading your time for it. Your goal is to make this bigger than your expenses.'],
   ['Expenses', 'Everything you must pay every month: taxes, living costs, children, and loan payments.'],
   ['Cashflow', 'Income minus expenses. Positive cashflow grows your savings every payday. Negative cashflow drains them.'],
@@ -55,7 +63,7 @@ function statTile(label, value, tone) {
 function dealCardHTML(c, size) {
   const tc = TYPE_COLOR[c.type] || '#ffc83d';
   return `<div class="gcard deal" style="--tc:${tc}">
-    <div class="gc-head"><span class="tag">${size === 'big' ? 'BIG DEAL' : 'SMALL DEAL'} • ${esc(TYPE_LABEL[c.type] || '')}</span></div>
+    <div class="gc-head"><span class="tag">${size === 'big' ? 'BIG DEAL' : size === 'high' ? 'HIGH STAKES' : 'SMALL DEAL'} • ${esc(TYPE_LABEL[c.type] || '')}</span></div>
     <div class="gc-art">${ART.icon(c.icon, 120)}</div>
     <h2>${esc(c.name)}</h2>
     <p class="blurb">${esc(c.blurb)}</p>
@@ -88,6 +96,14 @@ function dieHTML(n, rolling) {
   return `<div class="die ${rolling ? 'roll' : ''}">${Array.from({ length: 9 }, (_, i) => `<i class="${dots.includes(i) ? 'on' : ''}"></i>`).join('')}</div>`;
 }
 
+function dreamCardHTML(pend) {
+  const d = pend.dream;
+  return `<div class="gcard deal" style="--tc:#ffd24d"><div class="gc-head"><span class="tag">DREAM GALLERY</span></div>
+    <div class="gc-art">${ART.icon(d.icon, 120)}</div><h2>${esc(d.name)}</h2><p class="blurb">${esc(d.blurb)}</p>
+    <div class="stats">${statTile('Dream price', peso(d.cost))}${statTile(pend.ok ? 'Ready' : 'Still needed', pend.ok ? 'Yes!' : peso(pend.short), pend.ok ? 'good' : '')}</div></div>`;
+}
+const dreamById = id => (typeof S !== 'undefined' && S && S.dreams ? S.dreams : []).find(d => d.id === id);
+
 function rankPlayers(players) {
-  return players.slice().sort((a, b) => (b.free - a.free) || (b.calc.coverage - a.calc.coverage) || (b.calc.netWorth - a.calc.netWorth));
+  return players.slice().sort((a, b) => ((b.dreamDone | 0) - (a.dreamDone | 0)) || (b.free - a.free) || (b.calc.coverage - a.calc.coverage) || (b.calc.netWorth - a.calc.netWorth));
 }

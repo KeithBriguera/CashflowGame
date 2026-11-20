@@ -45,6 +45,20 @@
     party: `<path d="M32 8c-10 0-16 8-16 18s6 18 16 18 16-8 16-18S42 8 32 8z" fill="#ff7ac8"/><path d="M32 44l-3 6h6z" fill="#ff7ac8"/><path d="M32 50c-6 4 6 6 0 12" stroke="#8b95b0" stroke-width="2.5" fill="none"/><ellipse cx="26" cy="22" rx="4" ry="6" fill="#fff" opacity=".5"/><circle cx="52" cy="14" r="3" fill="${G}"/><circle cx="12" cy="10" r="3" fill="#4cc9f0"/><circle cx="54" cy="44" r="3" fill="#27d3a2"/>`
   };
 
+  Object.assign(ART, {
+    house: `<path d="M8 30L32 10l24 20v26H8z" fill="#ffd9a8"/><path d="M4 32L32 8l28 24" fill="none" stroke="#ee6b5b" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><rect x="26" y="38" width="12" height="18" rx="2" fill="#8a5a3c"/><rect x="14" y="36" width="9" height="9" rx="1.5" fill="#6fd0ff"/><rect x="41" y="36" width="9" height="9" rx="1.5" fill="#6fd0ff"/>`,
+    cap: `<path d="M32 12L4 26l28 14 28-14z" fill="#1b2540"/><path d="M16 34v10c0 4 7 8 16 8s16-4 16-8V34L32 42z" fill="#2a3558"/><path d="M56 28v16" stroke="#ffc83d" stroke-width="3" stroke-linecap="round"/><circle cx="56" cy="46" r="3.5" fill="#ffc83d"/>`,
+    plane: `<g transform="rotate(-35 32 32)"><rect x="6" y="27" width="52" height="10" rx="5" fill="#e8f4ff"/><path d="M26 30L18 10h8l14 20z" fill="#4cc9f0"/><path d="M26 34L18 54h8l14-20z" fill="#4cc9f0"/><path d="M8 30L4 22h6l6 8z" fill="#4cc9f0"/><circle cx="50" cy="32" r="2.5" fill="#1b2540"/></g>`,
+    boat: `<path d="M8 40h48l-8 14H16z" fill="#ee6b5b"/><path d="M32 8v32" stroke="#8a5a3c" stroke-width="3"/><path d="M34 10l18 24H34z" fill="#fff6e6"/><path d="M30 14L16 34h14z" fill="#ffd24d"/><path d="M4 58c6-4 10-4 16 0s10 4 16 0 10-4 16 0 6 2 8 0" fill="none" stroke="#4cc9f0" stroke-width="3" stroke-linecap="round"/>`,
+    clinic: `<rect x="10" y="16" width="44" height="40" rx="5" fill="#fff"/><rect x="10" y="16" width="44" height="10" rx="5" fill="#ee6b5b"/><rect x="28" y="30" width="8" height="18" rx="1.5" fill="#27d3a2"/><rect x="23" y="35" width="18" height="8" rx="1.5" fill="#27d3a2"/><rect x="26" y="50" width="12" height="6" fill="#8b95b0"/>`,
+    car: `<path d="M6 40l6-14c1-3 4-5 7-5h26c3 0 6 2 7 5l6 14v10H6z" fill="#4aa3df"/><path d="M16 26h14v10H12zM34 26h14l4 10H34z" fill="#bfe6ff"/><circle cx="18" cy="50" r="6.5" fill="#1b2540"/><circle cx="46" cy="50" r="6.5" fill="#1b2540"/><circle cx="18" cy="50" r="2.5" fill="#8b95b0"/><circle cx="46" cy="50" r="2.5" fill="#8b95b0"/><rect x="52" y="38" width="5" height="4" rx="1" fill="#ffd24d"/>`,
+    gift: `<rect x="10" y="26" width="44" height="30" rx="4" fill="#ee6b5b"/><rect x="8" y="20" width="48" height="10" rx="3" fill="#ff8f8f"/><rect x="28" y="20" width="8" height="36" fill="#ffd24d"/><path d="M32 20c-8-12-18-6-12 0zM32 20c8-12 18-6 12 0z" fill="#ffd24d"/>`,
+    audit: `<rect x="12" y="8" width="40" height="50" rx="5" fill="#fff6e6"/><rect x="22" y="4" width="20" height="10" rx="3" fill="#8b95b0"/><path d="M20 26h24M20 34h24M20 42h14" stroke="#9aa5c4" stroke-width="3" stroke-linecap="round"/><circle cx="44" cy="46" r="8" fill="#ee6b5b"/><path d="M40 46h8" stroke="#fff" stroke-width="3" stroke-linecap="round"/>`,
+    dream: `<path d="M32 6l7.5 17 18.5 2-14 12.5 4 18.2L32 46 16 55.7l4-18.2L6 25l18.5-2z" fill="#ffd24d"/><path d="M32 6l7.5 17 18.5 2-14 12.5z" fill="#ffe98a"/><circle cx="32" cy="30" r="5" fill="#fff6c9"/>`,
+    hsdeal: `<rect x="8" y="20" width="48" height="34" rx="5" fill="#8a5a3c"/><rect x="8" y="20" width="48" height="12" rx="5" fill="#a8743f"/><path d="M24 20v-5a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v5" fill="none" stroke="#5a3a22" stroke-width="3.5"/><rect x="28" y="30" width="8" height="8" rx="1.5" fill="#ffd24d"/>`
+  });
+  ART.payout = ART.payday; ART.luxury = ART.sale; ART.windfall = ART.gift;
+
   function icon(name, size, cls) {
     const body = ART[name] || ART.opp;
     const s = size ? ` width="${size}" height="${size}"` : '';

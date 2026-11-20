@@ -72,7 +72,59 @@ const MARKETS = [
 ];
 
 // Game pacing: boost monthly returns so a training session (about 25 rounds) can produce winners.
+
+// ---------- High Stakes track (players who escape the paycheck race) ----------
+const HIGH_BOARD = [
+  'payout','hsdeal','windfall','hsdeal','dream','audit',
+  'payout','hsdeal','luxury','hsdeal','charity','dream',
+  'payout','hsdeal','windfall','hsdeal','luxury','audit',
+  'payout','hsdeal','dream','hsdeal','charity','windfall'
+];
+const HS_MULT = 4; // a High Stakes payout is a quarter's worth of monthly cashflow
+
+// Every player picks one dream in the lobby. Buying it on a Dream Gallery tile wins the game.
+const DREAMS = [
+  { id:'home',    name:'Family Home',            icon:'house',   cost:450000, blurb:'A house with a garden for your family. No more rent, no more landlord.' },
+  { id:'school',  name:'Scholarship Fund',       icon:'cap',     cost:300000, blurb:'Send nieces, nephews and kids from your barangay to college for free.' },
+  { id:'resort',  name:'Beach Resort',           icon:'resort',  cost:650000, blurb:'A small resort by the sea. Work becomes welcoming guests.' },
+  { id:'tour',    name:'Family World Tour',      icon:'plane',   cost:250000, blurb:'A year of travel with the people you love, with nobody checking the clock.' },
+  { id:'clinic',  name:'Community Clinic',       icon:'clinic',  cost:500000, blurb:'A free clinic for your town, with doctors and medicine on hand.' },
+  { id:'car',     name:'Dream Car',              icon:'car',     cost:350000, blurb:'The car you have admired for years, paid in full. No loan.' },
+  { id:'boat',    name:'Island Boat Tours',      icon:'boat',    cost:320000, blurb:'A boat, a crew and the best island-hopping tours in the province.' },
+  { id:'farm',    name:'Farm and Orchard',       icon:'farm',    cost:400000, blurb:'Land of your own with fruit trees, fresh air and a roadside stall.' },
+  { id:'found',   name:'Give Back Foundation',   icon:'charity', cost:600000, blurb:'A foundation that funds meals, school supplies and livelihood starts.' },
+  { id:'parents', name:'Parents\' Retirement',   icon:'house',   cost:380000, blurb:'A comfortable home and monthly allowance so your parents can finally rest.' }
+];
+
+const HS_DEALS = [
+  { name:'Milk Tea Franchise Network', type:'business', icon:'tea', cost:160000, down:160000, mortgage:0, cf:13000, blurb:'Five franchise kiosks in busy malls, run by managers you trained.', lesson:'Systems and managers let a business earn without you standing behind the counter.' },
+  { name:'Laundry Franchise Chain', type:'business', icon:'laundry', cost:200000, down:200000, mortgage:0, cf:17000, blurb:'Self-service laundry shops near dorms and condos, open day and night.', lesson:'Boring, repeat-demand businesses are often the steadiest earners.' },
+  { name:'Water Refilling Network', type:'business', icon:'water', cost:180000, down:180000, mortgage:0, cf:15000, blurb:'Refilling stations in five barangays with a delivery tricycle.', lesson:'Everyone needs water. Needs beat wants when you pick a business.' },
+  { name:'Grocery Chain Share', type:'business', icon:'grocery', cost:350000, down:350000, mortgage:0, cf:29000, blurb:'A partner share in a growing neighbourhood grocery chain.', lesson:'Being a partner means sharing in profits you do not have to work for.' },
+  { name:'Gas Station Stake', type:'business', icon:'gas', cost:300000, down:300000, mortgage:0, cf:24000, blurb:'A stake in a station on a busy highway, with a convenience store.', lesson:'Location is value. Traffic you do not create can still pay you.' },
+  { name:'Farm Land and Packing House', type:'business', icon:'farm', cost:250000, down:250000, mortgage:0, cf:19000, blurb:'Farmland plus a packing house that sells to supermarkets.', lesson:'Owning part of the supply chain captures more of the profit.' },
+  { name:'Commercial Building', type:'property', icon:'commercial', cost:600000, down:150000, mortgage:450000, cf:20000, blurb:'Ground-floor shops with tenants already signed for three years.', lesson:'Leverage multiplies returns, and also the risk if tenants leave.' },
+  { name:'Condotel Units', type:'property', icon:'apartment', cost:420000, down:105000, mortgage:315000, cf:13000, blurb:'Two furnished units in a tourist area, managed by a hotel operator.', lesson:'Hands-off management costs a share of income but frees your time.' },
+  { name:'Boarding House Complex', type:'property', icon:'boarding', cost:500000, down:125000, mortgage:375000, cf:16000, blurb:'Twelve rooms beside a university, nearly always full.', lesson:'Steady demand from students keeps occupancy high.' },
+  { name:'Index Fund Block', type:'stock', icon:'fund', cost:120000, down:120000, mortgage:0, cf:9500, blurb:'A diversified fund holding dozens of strong companies.', lesson:'Diversification lowers the chance that one bad bet sinks you.' }
+];
+
+const HS_LUXURY = [
+  { cost:25000, icon:'sale',   text:'You booked a luxury staycation for the whole family.', lesson:'Rewards are fine. Pay for them from income, not from the money meant for your dream.' },
+  { cost:40000, icon:'gaming', text:'You upgraded your whole home entertainment setup.', lesson:'Every upgrade is a trade: you are choosing it over your dream.' },
+  { cost:60000, icon:'party',  text:'You hosted a grand celebration for your whole barangay.', lesson:'Generosity feels great. Decide the amount before the party, not after.' },
+  { cost:30000, icon:'sneaker',text:'You bought a closet of designer shoes and bags.', lesson:'Lifestyle creep quietly eats the money your dream needs.' }
+];
+
+const HS_WINDFALLS = [
+  { amount:30000, text:'A supplier gave you a loyalty rebate for paying on time.', lesson:'Good relationships and reliable habits can pay you back.' },
+  { amount:50000, text:'One of your properties was revalued after a new road opened.', lesson:'Assets in growing areas can gain value while you sleep.' },
+  { amount:40000, text:'A business award came with prize money.', lesson:'Doing good work in public brings opportunities.' },
+  { amount:60000, text:'A partner bought back a small stake at a premium.', lesson:'Good deals can have a profitable exit.' },
+  { amount:25000, text:'A viral post sent a wave of customers to your shops.', lesson:'Marketing can multiply a business, but do not rely on luck alone.' }
+];
+
 const BOOST = 1.25;
 [SMALL_DEALS, BIG_DEALS].forEach(list => list.forEach(d => { d.cf = Math.round(d.cf * BOOST / 100) * 100; }));
 
-module.exports = { BOARD, PROFESSIONS, SMALL_DEALS, BIG_DEALS, DOODADS, MARKETS };
+module.exports = { BOARD, HIGH_BOARD, HS_MULT, DREAMS, HS_DEALS, HS_LUXURY, HS_WINDFALLS, PROFESSIONS, SMALL_DEALS, BIG_DEALS, DOODADS, MARKETS };

@@ -49,7 +49,7 @@ function shuffle(a) {
 function createRoom() {
   const room = {
     code: newCode(), hostKey: uid(), hosts: new Set(), created: Date.now(),
-    state: 'lobby', players: [], settings: { maxRounds: 25, timer: 0 },
+    state: 'lobby', players: [], settings: { maxRounds: 25, timer: 0, dreams: true },
     round: 1, turnIdx: -1, turn: null, log: [], history: [], rollSeq: 0, evtSeq: 0, evt: null,
     decks: {}, botTimer: null, turnTimer: null, timerKey: '', endReason: null,
     trade: null, tradeTimer: null, tradeBotTimer: null
@@ -85,6 +85,7 @@ function addPlayer(room, name, bot, avatar) {
     avatar: av, color: AV_COLORS[av], ws: null, connected: !!bot,
     prof: null, salary: 0, taxes: 0, other: 0, childCost: 0, children: 0,
     cash: 0, liabs: [], assets: [], pos: 0, skip: 0, dbl: 0, free: false, freeRound: null,
+    stage: 'race', dream: bot ? C.DREAMS[rnd(C.DREAMS.length)].id : null, dreamDone: false,
     stats: { doodads: 0, deals: 0, loans: 0, donated: 0, sold: 0, paydays: 0, babies: 0 }
   };
   room.players.push(p);
@@ -95,7 +96,7 @@ function initPlayer(p, prof) {
   Object.assign(p, {
     prof: prof.name, salary: prof.salary, taxes: prof.taxes, other: prof.other,
     childCost: prof.childCost, children: 0, cash: prof.cash, assets: [], pos: 0, skip: 0, dbl: 0,
-    free: false, freeRound: null,
+    free: false, freeRound: null, stage: 'race', dreamDone: false,
     liabs: prof.liabs.map(l => ({ id: uid(), name: l.name, balance: l.balance, pay: l.pay, bank: false })),
     stats: { doodads: 0, deals: 0, loans: 0, donated: 0, sold: 0, paydays: 0, babies: 0 }
   });
@@ -131,6 +132,9 @@ function ensureCash(room, p, amt) {
   return need;
 }
 
+const dreamOf = p => C.DREAMS.find(d => d.id === p.dream);
+const boardOf = p => (p.stage === 'high' ? C.HIGH_BOARD : C.BOARD);
+
 function checkFree(room, p) {
   if (p.free || !p.prof) return;
   const c = calc(p);
@@ -139,6 +143,11 @@ function checkFree(room, p) {
     p.freeRound = room.round;
     log(room, `${p.name} escaped the paycheck race! Passive income now covers all expenses.`, p.id);
     emit(room, 'escape', p.id);
+    if (room.settings.dreams) {
+      p.stage = 'high'; p.salary = 0; p.pos = 0;
+      const d = dreamOf(p);
+      log(room, `${p.name} quit the job and moves to the High Stakes track, chasing the ${d ? d.name : 'dream'} (${peso(d ? d.cost : 0)}).`, p.id);
+    }
   }
 }
 
@@ -154,12 +163,12 @@ function snapshot(room) {
 function startGame(room) {
   if (room.players.length < 1) return;
   const profs = shuffle(C.PROFESSIONS);
-  room.players.forEach((p, i) => initPlayer(p, profs[i % profs.length]));
+  room.players.forEach((p, i) => { initPlayer(p, profs[i % profs.length]); if (!dreamOf(p)) p.dream = C.DREAMS[rnd(C.DREAMS.length)].id; });
   room.state = 'playing';
   endTrade(room);
   room.round = 1; room.turnIdx = -1; room.turn = null; room.history = []; room.decks = {}; room.endReason = null;
   room.log = []; room.timerKey = '';
-  log(room, `The game has started! ${room.settings.maxRounds ? room.settings.maxRounds + ' rounds' : 'No round limit'}. Goal: make your passive income cover your expenses.`);
+  log(room, `The game has started! ${room.settings.maxRounds ? room.settings.maxRounds + ' rounds' : 'No round limit'}. Goal: make your passive income cover your expenses${room.settings.dreams ? ', then make your dream real' : ''}.`);
   emit(room, 'start');
   snapshot(room);
   nextTurn(room);
@@ -186,9 +195,9 @@ function nextTurn(room) {
       room.round++;
       if (room.settings.maxRounds > 0 && room.round > room.settings.maxRounds) return endGame(room, 'rounds');
     }
-    if (room.players.every(x => x.free)) return endGame(room, 'allfree');
+    if (!room.settings.dreams && room.players.every(x => x.free)) return endGame(room, 'allfree');
     const p = room.players[room.turnIdx];
-    if (p.free) continue;
+    if (p.free && !room.settings.dreams) continue;
     if (p.skip > 0) { p.skip--; log(room, `${p.name} is still job hunting and skips this turn.`, p.id); continue; }
     room.turn = { pid: p.id, phase: 'roll', pending: null, lastRoll: room.turn && room.turn.lastRoll, deadline: null };
     return;
@@ -203,11 +212,14 @@ function setResult(room, title, text, lesson, tone, icon) {
 
 function doPayday(room, p) {
   const c = calc(p);
-  p.cash += c.cashflow;
+  const high = p.stage === 'high', amt = high ? c.cashflow * C.HS_MULT : c.cashflow;
+  p.cash += amt;
   p.stats.paydays++;
-  let note = `Payday: ${c.cashflow >= 0 ? '+' : ''}${peso(c.cashflow)} (income ${peso(c.income)} − expenses ${peso(c.expenses)}).`;
+  let note = high
+    ? `Payout: ${amt >= 0 ? '+' : ''}${peso(amt)} (a quarter of your monthly cashflow of ${peso(c.cashflow)}).`
+    : `Payday: ${c.cashflow >= 0 ? '+' : ''}${peso(c.cashflow)} (income ${peso(c.income)} − expenses ${peso(c.expenses)}).`;
   if (p.cash < 0) { const n = ensureCash(room, p, 0); note += ` You ran out of cash and borrowed ${peso(n)}.`; }
-  emit(room, 'payday', p.id, { amount: c.cashflow });
+  emit(room, 'payday', p.id, { amount: amt });
   return note;
 }
 
@@ -218,16 +230,67 @@ function doRoll(room, p) {
   const steps = dice.reduce((a, b) => a + b, 0);
   room.turn.lastRoll = { dice, n: ++room.rollSeq, pid: p.id, steps };
   const paydayNotes = [];
+  const board = boardOf(p);
   for (let i = 0; i < steps; i++) {
-    p.pos = (p.pos + 1) % C.BOARD.length;
-    if (C.BOARD[p.pos] === 'payday') paydayNotes.push(doPayday(room, p));
+    p.pos = (p.pos + 1) % board.length;
+    if (board[p.pos] === 'payday' || board[p.pos] === 'payout') paydayNotes.push(doPayday(room, p));
   }
-  const space = C.BOARD[p.pos];
+  const space = board[p.pos];
   log(room, `${p.name} rolled ${dice.join(' + ')}${n > 1 ? ' = ' + steps : ''}.`, p.id);
   resolveSpace(room, p, space, paydayNotes.join(' '));
 }
 
-function resolveSpace(room, p, space, paydayText) {
+function resolveHigh(room, p, space, paydayText) {
+  const t = room.turn, pre = paydayText ? paydayText + ' ' : '';
+  switch (space) {
+    case 'payout':
+      setResult(room, 'Payout!', pre.trim(), 'Your assets are paying you now. The bigger your passive income, the faster your dream gets closer.', 'good', 'payday');
+      break;
+    case 'hsdeal': {
+      const card = draw(room, 'hsdeal', C.HS_DEALS);
+      t.phase = 'decide';
+      t.pending = { kind: 'deal', size: 'high', card: { ...card }, note: paydayText || '' };
+      emit(room, 'card', p.id);
+      break;
+    }
+    case 'windfall': {
+      const w = draw(room, 'windfall', C.HS_WINDFALLS);
+      p.cash += w.amount;
+      emit(room, 'payday', p.id, { amount: w.amount });
+      setResult(room, 'Windfall!', `${pre}${w.text} You receive ${peso(w.amount)}.`, w.lesson, 'good', 'gift');
+      break;
+    }
+    case 'audit': {
+      const fee = Math.max(10000, Math.round(p.cash * 0.1 / 1000) * 1000);
+      const borrowed = ensureCash(room, p, fee);
+      p.cash -= fee;
+      emit(room, 'doodad', p.id, { amount: fee });
+      setResult(room, 'Tax Audit', `${pre}The tax office reviewed your growing income. You paid ${peso(fee)} in taxes and fees.${borrowed ? ' You borrowed ' + peso(borrowed) + ' to cover it.' : ''}`, 'More income means more tax. Plan and set money aside for it, and keep clean records.', 'bad', 'audit');
+      break;
+    }
+    case 'luxury': {
+      const card = draw(room, 'luxury', C.HS_LUXURY);
+      const borrowed = ensureCash(room, p, card.cost);
+      p.cash -= card.cost; p.stats.doodads += card.cost;
+      emit(room, 'doodad', p.id, { amount: card.cost });
+      log(room, `${p.name} spent ${peso(card.cost)}: ${card.text}`, p.id);
+      setResult(room, 'Luxury Temptation', `${pre}${card.text} Cost: ${peso(card.cost)}.${borrowed ? ' You borrowed ' + peso(borrowed) + ' to pay for it.' : ''}`, card.lesson, 'bad', card.icon);
+      break;
+    }
+    case 'dream': {
+      const d = dreamOf(p);
+      if (!d) { setResult(room, 'Dream Gallery', 'You have not picked a dream.', '', 'neutral', 'dream'); break; }
+      t.phase = 'decide';
+      t.pending = { kind: 'dream', dream: { ...d }, ok: p.cash >= d.cost, short: Math.max(0, d.cost - p.cash), note: paydayText || '' };
+      emit(room, 'card', p.id);
+      break;
+    }
+    default: resolveSpace(room, p, space, paydayText, true);
+  }
+}
+
+function resolveSpace(room, p, space, paydayText, fromHigh) {
+  if (p.stage === 'high' && !fromHigh) return resolveHigh(room, p, space, paydayText);
   const t = room.turn;
   const pre = paydayText ? paydayText + ' ' : '';
   switch (space) {
@@ -516,6 +579,20 @@ function act(room, p, msg) {
       if (!pend || pend.kind !== 'charity') return 'No donation request right now.';
       setResult(room, 'Maybe Next Time', 'You did not donate this time.', '', 'neutral', 'charity');
       return null;
+    case 'buy_dream': {
+      if (!pend || pend.kind !== 'dream') return 'No dream to buy right now.';
+      const d = dreamOf(p);
+      if (p.cash < d.cost) return `You need ${peso(d.cost - p.cash)} more for your dream.`;
+      p.cash -= d.cost; p.dreamDone = true;
+      emit(room, 'win', p.id);
+      log(room, `${p.name} made the dream real: ${d.name}!`, p.id);
+      endGame(room, 'dream');
+      return null;
+    }
+    case 'skip_dream':
+      if (!pend || pend.kind !== 'dream') return 'No dream to buy right now.';
+      setResult(room, pend.ok ? 'Not Yet' : 'Keep Going', pend.ok ? 'You chose to wait on your dream.' : `You are ${peso(pend.short)} away from ${pend.dream.name}. Keep growing your income and come back.`, 'A dream needs a price tag and a plan. Knowing the number keeps you moving toward it.', 'neutral', pend.dream.icon);
+      return null;
     case 'end_turn':
       if (t.phase !== 'done') return 'Finish the current action first.';
       nextTurn(room);
@@ -530,8 +607,15 @@ function decideFor(room, p, mode) {
   const t = room.turn, pend = t.pending;
   if (t.phase === 'roll') return { t: 'roll' };
   if (pend.kind === 'opp_choice') return mode === 'auto' ? { t: 'choose_deal', size: 'small' } : { t: 'choose_deal', size: p.cash >= 150000 ? 'big' : 'small' };
+  if (pend.kind === 'dream') return pend.ok ? { t: 'buy_dream' } : { t: 'skip_dream' };
   if (pend.kind === 'deal') {
     if (mode === 'auto') return { t: 'pass' };
+    if (p.stage === 'high') {
+      const d = dreamOf(p), saving = d && p.cash >= d.cost * 0.45;
+      if (!saving && pend.card.down <= p.cash * 0.6) return { t: 'buy' };
+      if (!pend.tradeUsed && !room.trade && pend.card.down > p.cash && pend.card.cf >= 5000 && room.players.length > 1) return { t: 'trade_open', ask: Math.min(pend.card.cost, fairFee(pend.card) + 500) };
+      return room.trade ? { t: 'noop' } : { t: 'pass' };
+    }
     if (pend.card.down <= p.cash - 2000) return { t: 'buy' };
     if (!pend.tradeUsed && !room.trade && pend.card.cf >= 1500 && room.players.length > 1) return { t: 'trade_open', ask: Math.min(pend.card.cost, fairFee(pend.card) + 500) };
     return room.trade ? { t: 'noop' } : { t: 'pass' };
@@ -599,7 +683,7 @@ function armTimer(room) {
 function pubPlayer(p) {
   return {
     id: p.id, name: p.name, color: p.color, avatar: p.avatar, bot: p.bot, connected: p.connected, prof: p.prof,
-    pos: p.pos, free: p.free, freeRound: p.freeRound, children: p.children, childCost: p.childCost,
+    pos: p.pos, free: p.free, freeRound: p.freeRound, stage: p.stage, dream: p.dream, dreamDone: p.dreamDone, children: p.children, childCost: p.childCost,
     cash: p.cash, salary: p.salary, taxes: p.taxes, other: p.other, dbl: p.dbl, skip: p.skip,
     liabs: p.liabs, assets: p.assets, stats: p.stats, calc: calc(p)
   };
@@ -608,7 +692,7 @@ function pubPlayer(p) {
 function view(room, forId) {
   return {
     t: 'state', code: room.code, state: room.state, round: room.round, settings: room.settings,
-    board: C.BOARD, endReason: room.endReason, you: forId || null, now: Date.now(),
+    board: C.BOARD, boards: { race: C.BOARD, high: C.HIGH_BOARD }, dreams: C.DREAMS, endReason: room.endReason, you: forId || null, now: Date.now(),
     turn: room.turn, trade: room.trade ? { ...room.trade, botSeen: undefined } : null, evt: room.evt, players: room.players.map(pubPlayer),
     log: room.log.slice(-30), history: room.history
   };
@@ -712,6 +796,7 @@ function onMessage(ws, msg) {
         }
         break;
       case 'set_rounds': room.settings.maxRounds = Number(msg.value) === 0 ? 0 : Math.max(5, Math.min(60, Number(msg.value) || 25)); break;
+      case 'set_dreams': room.settings.dreams = !!msg.value; break;
       case 'set_timer': { const v = Number(msg.value); room.settings.timer = TIMER_CHOICES.includes(v) ? v : 0; break; }
       case 'start': if (room.state === 'lobby') startGame(room); break;
       case 'skip_turn':
@@ -738,6 +823,10 @@ function onMessage(ws, msg) {
       } else send(ws, { t: 'toast', msg: 'That character is already taken.' });
       return commit(room);
     }
+    if (msg.t === 'set_dream') {
+      if (room.state === 'lobby' && C.DREAMS.some(d => d.id === msg.id)) p.dream = msg.id;
+      return commit(room);
+    }
     const err = act(room, p, msg);
     if (err) send(ws, { t: 'toast', msg: err });
     commit(room);
@@ -755,4 +844,4 @@ setInterval(() => {
 if (require.main === module) {
   server.listen(PORT, () => console.log(`AHON! running on http://localhost:${PORT}`));
 }
-module.exports = { server, rooms, calc };
+module.exports = { server, rooms, calc, commit };

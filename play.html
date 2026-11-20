@@ -102,6 +102,7 @@ function renderLobby(p) {
     <div class="card center-t"><div style="display:grid;place-items:center">${ART.avatar(p.avatar, 76)}</div>
       <h2 style="margin-top:8px">You're in, ${esc(p.name)}!</h2><p class="mute">Room <b class="gold-t">${esc(S.code)}</b>. Waiting for the host to start…</p></div>
     <div class="card"><h3>Change character</h3><div class="avgrid">${[0, 1, 2, 3, 4, 5, 6, 7].map(i => `<button class="${i === p.avatar ? 'sel' : ''}" ${taken.has(i) ? 'disabled' : ''} onclick="send({t:'set_avatar',avatar:${i}})">${ART.avatar(i)}</button>`).join('')}</div></div>
+    ${S.settings.dreams ? `<div class="card"><h3>Your dream</h3><p class="small mute" style="margin:0 0 10px">Pick what you are really working toward. Escape the paycheck race, then make it real to win.</p><div class="dreamgrid">${S.dreams.map(d => `<button class="dream ${d.id === p.dream ? 'sel' : ''}" onclick="send({t:'set_dream',id:'${d.id}'})">${ART.icon(d.icon, 38)}<b>${esc(d.name)}</b><span>${peso(d.cost)}</span></button>`).join('')}</div></div>` : ''}
     <div class="card"><h3>Who's here</h3><div style="display:flex;flex-wrap:wrap;gap:8px">${S.players.map(q => `<span class="pill">${ART.avatar(q.avatar, 22)} ${esc(q.name)}</span>`).join('')}</div></div>
     ${glossaryBtn()}`;
 }
@@ -117,7 +118,7 @@ function hud(p) {
   const c = p.calc, pct = Math.min(100, c.coverage * 100), R = 28, circ = 2 * Math.PI * R;
   const flash = lastCash !== null && lastCash !== p.cash ? 'flash' : ''; lastCash = p.cash;
   return `<div class="hud"><div class="ring"><svg class="prog" viewBox="0 0 60 60"><circle cx="30" cy="30" r="${R}" fill="none" stroke="rgba(29,36,51,.15)" stroke-width="4"/><circle cx="30" cy="30" r="${R}" fill="none" stroke="${c.coverage >= 1 ? '#2fae8f' : '#f2b632'}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${circ}" stroke-dashoffset="${circ * (1 - pct / 100)}" style="transition:stroke-dashoffset .8s"/></svg>${ART.avatar(p.avatar, 52)}</div>
-    <div class="who"><b>${esc(p.name)}</b><span class="mute small">${esc(p.prof)} • ${S.settings.maxRounds ? `Round ${Math.min(S.round, S.settings.maxRounds)}/${S.settings.maxRounds}` : `Round ${S.round}`}</span></div>
+    <div class="who"><b>${esc(p.name)}</b><span class="mute small">${p.stage === 'high' ? 'High Stakes' : esc(p.prof)} • ${S.settings.maxRounds ? `Round ${Math.min(S.round, S.settings.maxRounds)}/${S.settings.maxRounds}` : `Round ${S.round}`}</span></div>
     <div class="cashbox ${flash}"><span class="mute small">Cash</span><b class="${p.cash < 0 ? 'bad-t' : ''}">${peso(p.cash)}</b></div></div>`;
 }
 
@@ -145,7 +146,7 @@ function playTab(p, mine, cur) {
   const c = p.calc;
   const roll = t && t.lastRoll, rolled = roll && roll.n !== lastRollSeq; if (roll) lastRollSeq = roll.n;
   let h = '';
-  if (p.free) {
+  if (p.free && !S.settings.dreams) {
     h += `<div class="gcard result tone-good" style="--tc:#8ddbc3"><div class="gc-head"><span class="tag">YOU ESCAPED!</span></div><div class="gc-art">${ART.icon('payday', 110)}</div><p class="blurb big">Your passive income now covers every expense. You are financially free in this game. Cheer on the others and help them think through their choices!</p></div>`;
   } else if (!t) {
     h += '';
@@ -154,6 +155,7 @@ function playTab(p, mine, cur) {
     if (pend && pend.kind === 'deal') h += dealCardHTML(pend.card, pend.size);
     else if (pend && pend.kind === 'result') h += resultCardHTML(pend);
     else if (pend && pend.kind === 'market') h += marketCardHTML(pend, false);
+    else if (pend && pend.kind === 'dream') h += dreamCardHTML(pend);
     else h += `<div class="card center-t mute">Watch the big screen. Your turn is coming up!</div>`;
   } else {
     h += `<div class="banner me">Your turn</div>` + timerBar(t);
@@ -166,6 +168,14 @@ function playTab(p, mine, cur) {
     }
   }
   // quick progress card
+  const dr = S.settings.dreams && dreamById(p.dream);
+  if (p.stage === 'high' && dr) {
+    const dp = Math.min(100, Math.round(Math.max(0, p.cash) / dr.cost * 100));
+    h += `<div class="card"><h3>Your dream: ${esc(dr.name)}</h3><div class="bar thick"><i style="width:${dp}%"></i></div><p class="small mute" style="margin:8px 0 0">Cash <b>${peso(p.cash)}</b> of <b>${peso(dr.cost)}</b> (${dp}%). ${p.cash >= dr.cost ? 'You can afford it! Land on a <b>Dream Gallery</b> tile to make it real.' : 'Grow your payouts and land on a Dream Gallery tile when you are ready.'}</p></div>`;
+  } else if (dr) {
+    h += `<div class="card" style="display:flex;gap:12px;align-items:center">${ART.icon(dr.icon, 44)}<div><b>Your dream: ${esc(dr.name)}</b><div class="small mute">${peso(dr.cost)}. Escape the paycheck race first, then make it real.</div></div></div>`;
+  }
+  if (p.stage === 'high') return h;
   h += `<div class="card"><h3>Road to freedom</h3><div class="bar thick"><i style="width:${Math.min(100, Math.round(c.coverage * 100))}%"></i></div>
     <p class="small mute" style="margin:8px 0 0">Passive income <b class="good-t">${peso(c.passive)}</b> vs expenses <b>${peso(c.expenses)}</b> a month (${Math.round(c.coverage * 100)}%). Reach 100% to win.</p>
     <button class="ghost" style="margin-top:10px" onclick="openFreedom()">${ART.ui('star', 18)} Preview life outside the race</button></div>`;
@@ -187,6 +197,7 @@ function openFreedom() {
 }
 
 const bump = (key, d, min, max, def) => { drafts[key] = Math.max(min, Math.min(max, (drafts[key] ?? def) + d)); render(); };
+const stepFor = cost => (cost >= 100000 ? 5000 : 500);
 const stepper = (key, min, max, def, step = 500) => `<div class="stepper"><button class="sec" onclick="bump('${key}',${-step},${min},${max},${def})">−</button><b>${peso(drafts[key] ?? def)}</b><button class="sec" onclick="bump('${key}',${step},${min},${max},${def})">+</button></div>`;
 const r500 = n => Math.max(500, Math.round(n / 500) * 500);
 const tradeBar = tr => { const left = Math.max(0, tr.deadline - S.now); return `<div class="timerbar"><i style="width:${Math.min(100, left / 90000 * 100)}%;animation:shrink ${left}ms linear forwards"></i></div><style>@keyframes shrink{to{width:0}}</style>`; };
@@ -195,7 +206,7 @@ function sellSetup(c) {
   const def = r500(c.cf * 1.2), v = drafts.ask ?? def;
   return `<div class="card" style="margin-top:12px"><h3>Sell this deal</h3>
     <p class="small mute" style="margin:0">Set your asking price. The buyer pays you this price and also pays the ${peso(c.down)} down payment. Others can make offers and you can counter.</p>
-    ${stepper('ask', 500, c.cost, def)}
+    ${stepper('ask', 500, c.cost, def, stepFor(c.cost))}
     <p class="small mute" style="margin:0 0 10px">This deal brings in ${peso(c.cf)} a month. A fair price is about one to two months of that income.</p>
     <div class="grid2"><button class="good" onclick="send({t:'trade_open',ask:${v}});drafts.setup=0">List for sale</button><button class="sec" onclick="drafts.setup=0;render()">Back</button></div></div>`;
 }
@@ -207,7 +218,7 @@ function sellerPanel(p, tr) {
     if (o.counter != null) return `<div class="offerrow"><div class="oh"><span style="display:flex;gap:8px;align-items:center">${ART.avatar(b.avatar, 30)}<b>${esc(b.name)}</b></span><b>${peso(o.price)}</b></div><p class="small mute" style="margin:6px 0 0">You countered ${peso(o.counter)}. Waiting for ${esc(b.name)}…</p></div>`;
     return `<div class="offerrow"><div class="oh"><span style="display:flex;gap:8px;align-items:center">${ART.avatar(b.avatar, 30)}<b>${esc(b.name)}</b></span><b>${peso(o.price)}</b></div>
       <div class="grid2" style="margin-top:8px"><button class="good" onclick="send({t:'trade_accept',offerId:'${o.id}'})">Accept</button><button class="sec" onclick="send({t:'trade_reject',offerId:'${o.id}'})">Decline</button></div>
-      ${stepper(key, 100, tr.card.cost, def, 500)}<button class="sec big-btn" onclick="send({t:'trade_counter',offerId:'${o.id}',price:${drafts[key] ?? def}})">Counter with ${peso(drafts[key] ?? def)}</button></div>`;
+      ${stepper(key, 100, tr.card.cost, def, stepFor(tr.card.cost))}<button class="sec big-btn" onclick="send({t:'trade_counter',offerId:'${o.id}',price:${drafts[key] ?? def}})">Counter with ${peso(drafts[key] ?? def)}</button></div>`;
   }).join('');
   return `<div class="card trade-card" style="margin-top:12px"><span class="tag">FOR SALE</span>${tradeBar(tr)}
     <h3 style="margin:8px 0 2px">Asking ${peso(tr.ask)}</h3>
@@ -230,7 +241,7 @@ function buyerTrade(p) {
   } else {
     const key = 'offer:' + tr.id, def = r500(tr.ask * 0.6), v = drafts[key] ?? def;
     act = `<button class="good big-btn" onclick="send({t:'trade_buy',loan:${short(tr.ask) > 0}})">Buy at ${peso(tr.ask)}${short(tr.ask) ? ' + borrow' : ''}</button>${note(tr.ask)}
-      <p class="small mute" style="margin:12px 0 0">Or haggle:</p>${stepper(key, 100, c.cost, def)}
+      <p class="small mute" style="margin:12px 0 0">Or haggle:</p>${stepper(key, 100, c.cost, def, stepFor(c.cost))}
       <button class="sec big-btn" onclick="send({t:'trade_offer',price:${v},loan:${short(v) > 0}})">Offer ${peso(v)}</button>`;
   }
   return `<div class="trade-card"><span class="tag">DEAL FOR SALE</span>${tradeBar(tr)}
@@ -245,6 +256,8 @@ function pendingHTML(p, pend) {
         <div class="gcard" style="--tc:#f2b632"><div class="gc-head"><span class="tag">OPPORTUNITY</span></div><div class="gc-art">${ART.icon('opp', 110)}</div>
         <h2>Pick a deal</h2><p class="blurb">A <b>small deal</b> costs less. A <b>big deal</b> pays more but needs far more cash.</p>
         <div class="grid2"><button onclick="send({t:'choose_deal',size:'small'})">Small deal</button><button class="good" onclick="send({t:'choose_deal',size:'big'})">Big deal</button></div></div>`;
+    case 'dream':
+      return dreamCardHTML(pend) + `<div class="card" style="margin-top:12px">${pend.ok ? `<div class="grid2"><button class="good" onclick="send({t:'buy_dream'})">Make it real</button><button class="sec" onclick="send({t:'skip_dream'})">Not yet</button></div>` : `<button class="sec big-btn" onclick="send({t:'skip_dream'})">Keep going</button><p class="small mute" style="margin:10px 0 0">You need ${peso(pend.short)} more cash. Payouts and good deals will get you there.</p>`}</div>`;
     case 'deal': {
       const c = pend.card, short = Math.max(0, c.down - p.cash), loan = Math.ceil(short / 1000) * 1000;
       if (S.trade && S.trade.sellerId === p.id) return dealCardHTML(c, pend.size) + sellerPanel(p, S.trade);

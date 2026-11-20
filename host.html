@@ -133,7 +133,7 @@ function topbar(extra) {
 
 let lobbyKey = '';
 function renderLobby() {
-  const key = JSON.stringify([S.code, S.players.map(p => [p.id, p.name, p.avatar, p.connected]), S.settings]);
+  const key = JSON.stringify([S.code, S.players.map(p => [p.id, p.name, p.avatar, p.connected, p.dream]), S.settings]);
   if (key === lobbyKey) return; lobbyKey = key;
   const focus = document.activeElement && document.activeElement.id;
   const timers = [[0, 'Off'], [30, '30 s'], [45, '45 s'], [60, '60 s'], [90, '90 s'], [120, '2 min']];
@@ -156,10 +156,12 @@ function renderLobby() {
       <div style="display:flex;justify-content:space-between;align-items:center"><h2>Players <span class="mute">${S.players.length}/8</span></h2><button class="sec" onclick="send({t:'add_bot'})">${ART.ui('bot', 18)} Add bot</button></div>
       <div class="joinlist">${S.players.length ? S.players.map(p => `<div class="joiner">
         <button class="sec x" title="Remove" onclick="send({t:'remove_player',pid:'${p.id}'})">${ART.ui('close', 14)}</button>${ART.avatar(p.avatar, 68)}<b>${esc(p.name)}</b>
-        <span class="mute small">${p.bot ? 'Bot' : p.connected ? 'Ready' : 'Offline'}</span></div>`).join('') : '<p class="mute" style="grid-column:1/-1">Waiting for players to join…</p>'}</div>
+        <span class="mute small">${p.bot ? 'Bot' : p.connected ? 'Ready' : 'Offline'}</span>${S.settings.dreams && dreamById(p.dream) ? `<span class="small" style="display:flex;align-items:center;justify-content:center;gap:4px">${ART.icon(dreamById(p.dream).icon, 16)}${esc(dreamById(p.dream).name)}</span>` : ''}</div>`).join('') : '<p class="mute" style="grid-column:1/-1">Waiting for players to join…</p>'}</div>
       <div class="settings">
         <label>Game length
           <select id="rounds" onchange="send({t:'set_rounds',value:this.value})">${[10, 15, 20, 25, 30, 40].map(v => `<option value="${v}" ${S.settings.maxRounds === v ? 'selected' : ''}>${v} rounds (about ${Math.round(v * 1.8)} min)</option>`).join('')}<option value="0" ${S.settings.maxRounds === 0 ? 'selected' : ''}>Unlimited (you end the game)</option></select></label>
+        <label>Dream goals and High Stakes
+          <select id="dreams" onchange="send({t:'set_dreams',value:this.value==='1'})"><option value="1" ${S.settings.dreams ? 'selected' : ''}>On: escape, then chase your dream</option><option value="0" ${S.settings.dreams ? '' : 'selected'}>Off: first to escape wins</option></select></label>
         <label>Turn timer
           <select id="timer" onchange="send({t:'set_timer',value:this.value})">${timers.map(([v, l]) => `<option value="${v}" ${S.settings.timer === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       </div>
@@ -193,6 +195,7 @@ function centerStage() {
     if (pend.kind === 'opp_choice') body = `<div class="wait"><div class="gc-art" style="--tc:#ffd24d">${ART.icon('opp', 110)}</div><span class="head">Opportunity</span>${esc(cur.name)} is choosing a small or big deal…</div>`;
     else if (pend.kind === 'deal') body = S.trade ? tradeHostHTML(S.trade) : dealCardHTML(pend.card, pend.size);
     else if (pend.kind === 'market') body = marketCardHTML(pend, false);
+    else if (pend.kind === 'dream') body = dreamCardHTML(pend);
     else if (pend.kind === 'charity') body = `<div class="wait"><div class="gc-art" style="--tc:#a78bfa">${ART.icon('charity', 100)}</div><span class="head">Give Back</span>Will ${esc(cur.name)} donate ${peso(pend.amount)} for bonus rolls?</div>`;
     else if (pend.kind === 'result') body = resultCardHTML(pend);
   }
@@ -202,19 +205,21 @@ function centerStage() {
 let gameKey = '';
 function renderGame() {
   const t = S.turn;
-  const cells = S.board.map((type, i) => {
+  const curP = t && S.players.find(p => p.id === t.pid), stg = curP ? curP.stage : 'race';
+  const bd = (S.boards && S.boards[stg]) || S.board;
+  const cells = bd.map((type, i) => {
     const sp = SPACES[type], [r, c] = POS[i];
     const cur = t && S.players.find(p => p.id === t.pid && p.pos === i);
     return `<div class="cell ${cur ? 'cur' : ''}" style="grid-row:${r + 1};grid-column:${c + 1};--c1:${sp.c1};--c2:${sp.c2}">${i === 0 ? '<span class="start">START</span>' : ''}${ART.icon(type)}<span class="nm">${sp.n}</span></div>`;
   }).join('');
-  const toks = S.players.map(p => `<div class="token ${t && t.pid === p.id ? 'cur' : ''}" data-id="${p.id}" style="left:${(POS[p.pos][1] + .5) * 100 / 7}%;top:${(POS[p.pos][0] + .5) * 100 / 7}%">${ART.avatar(p.avatar)}</div>`).join('');
+  const toks = S.players.filter(p => p.stage === stg).map(p => `<div class="token ${t && t.pid === p.id ? 'cur' : ''}" data-id="${p.id}" style="left:${(POS[p.pos][1] + .5) * 100 / 7}%;top:${(POS[p.pos][0] + .5) * 100 / 7}%">${ART.avatar(p.avatar)}</div>`).join('');
   const ranked = rankPlayers(S.players);
   const plist = ranked.map(p => {
-    const c = p.calc, pct = Math.min(100, Math.round(c.coverage * 100));
+    const c = p.calc, dr = p.stage === 'high' && dreamById(p.dream), pct = dr ? Math.min(100, Math.round(p.cash / dr.cost * 100)) : Math.min(100, Math.round(c.coverage * 100));
     return `<div class="pc ${t && t.pid === p.id ? 'cur' : ''}">${ART.avatar(p.avatar, 48)}<div>
       <div class="top"><b>${esc(p.name)}${p.free ? '<span class="gold-t">' + ART.ui('trophy', 16) + '</span>' : ''}</b><span class="mute small">${esc(p.prof)}${!p.connected && !p.bot ? ' • offline' : ''}</span></div>
       <div class="bar" style="margin-top:5px"><i style="width:${pct}%"></i></div>
-      <div class="nums"><span>Freedom <b>${Math.round(c.coverage * 100)}%</b></span><span>Cash <b>${compact(p.cash)}</b></span><span>Passive <b class="good-t">${compact(c.passive)}</b></span><span>Assets <b>${p.assets.length}</b></span></div></div></div>`;
+      <div class="nums"><span>${dr ? 'Dream' : 'Freedom'} <b>${dr ? pct : Math.round(c.coverage * 100)}%</b></span><span>Cash <b>${compact(p.cash)}</b></span><span>Passive <b class="good-t">${compact(c.passive)}</b></span><span>Assets <b>${p.assets.length}</b></span></div></div></div>`;
   }).join('');
   const logs = S.log.slice(-14).reverse().map(l => `<div class="logline">${esc(l.msg)}</div>`).join('');
   const old = document.querySelector('.logbox'), scroll = old ? old.scrollTop : 0;
@@ -230,7 +235,8 @@ function renderGame() {
   }
   const board = document.getElementById('board');
   const sig = stageHTML;
-  if (first || board.dataset.cells !== S.board.join()) { board.dataset.cells = S.board.join(); board.innerHTML = cells + `<div class="stage" id="stage"></div><div class="tokens" id="tokens"></div>`; gameKey = ''; }
+  board.classList.toggle('hs', stg === 'high');
+  if (first || board.dataset.cells !== bd.join()) { board.dataset.cells = bd.join(); board.innerHTML = cells + `<div class="stage" id="stage"></div><div class="tokens" id="tokens"></div>`; gameKey = ''; }
   document.getElementById('tokens').innerHTML = toks;
   // refresh current cell highlight without rebuilding stage
   [...board.querySelectorAll('.cell')].forEach((el, i) => el.classList.toggle('cur', !!(t && S.players.find(p => p.id === t.pid && p.pos === i))));
@@ -302,7 +308,7 @@ function renderEnded() {
   const pod = (p, cls, n) => p ? `<div class="pod ${cls}">${ART.avatar(p.avatar)}<b>${esc(p.name)}</b><span class="mute small">${Math.round(p.calc.coverage * 100)}% free</span><div class="block">${n}</div></div>` : '';
   const totDoodad = S.players.reduce((s, p) => s + p.stats.doodads, 0);
   const totPassive = S.players.reduce((s, p) => s + p.calc.passive, 0);
-  const reason = { rounds: 'All rounds played.', allfree: 'Everyone escaped!', host: 'Ended by the host.', stuck: '' }[S.endReason] || '';
+  const reason = { rounds: 'All rounds played.', allfree: 'Everyone escaped!', dream: (() => { const w = S.players.find(p => p.dreamDone); const d = w && dreamById(w.dream); return w ? `${w.name} made the dream real: ${d ? d.name : ''}!` : 'A dream came true!'; })(), host: 'Ended by the host.', stuck: '' }[S.endReason] || '';
   app.innerHTML = topbar(`<button class="sec" onclick="downloadCSV()">${ART.ui('download', 18)} Results (CSV)</button><button onclick="send({t:'new_game'})">Play again</button>`) + `<div class="debrief">
     <h1 style="font-size:2.4rem">Debrief <span class="mute" style="font-size:1rem;font-family:var(--body)">${esc(reason)}</span></h1>
     <div class="podium">${pod(rank[1], 'second', 2)}${pod(rank[0], 'first', 1)}${pod(rank[2], 'third', 3)}</div>

@@ -17,6 +17,7 @@ let S = null, net, lastEvt = 0, lastRollSeq = -1, lastTurnKey = '', soundOn = tr
 const app = document.getElementById('app');
 const saved = (() => { try { return JSON.parse(sessionStorage.getItem('ahon_host') || 'null'); } catch { return null; } })();
 const shown = {};          // animated (displayed) board position per player
+const shownStage = {};
 let moving = false, tickTimer = null;
 
 net = connectWS({
@@ -69,20 +70,40 @@ function playEvent(e) {
 }
 
 /* ---------- board geometry ---------- */
-function boardPositions() {
-  const pos = [];
-  for (let c = 0; c < 7; c++) pos.push([0, c]);
-  for (let r = 1; r < 7; r++) pos.push([r, 6]);
-  for (let c = 5; c >= 0; c--) pos.push([6, c]);
-  for (let r = 5; r >= 1; r--) pos.push([r, 0]);
-  return pos;
+// Two stadium-shaped loops share one board: the Rat Race inside, High Stakes around it.
+// Coordinates live in a 150 x 100 box; x and y are turned into percentages for CSS.
+const GEOM = {
+  outer: { x0: 5, y0: 5, x1: 145, y1: 95, tile: 8 },
+  inner: { x0: 15.5, y0: 15.5, x1: 134.5, y1: 84.5, tile: 7.4 }
+};
+function loopPts(g, n) {
+  const r = (g.y1 - g.y0) / 2, L = (g.x1 - g.x0) - 2 * r, P = 2 * L + 2 * Math.PI * r, pts = [];
+  for (let i = 0; i < n; i++) {
+    let s = i * P / n, x, y;
+    if (s < L) { x = g.x0 + r + s; y = g.y0; }
+    else if ((s -= L) < Math.PI * r) { const a = -Math.PI / 2 + s / r; x = g.x1 - r + r * Math.cos(a); y = g.y0 + r + r * Math.sin(a); }
+    else if ((s -= Math.PI * r) < L) { x = g.x1 - r - s; y = g.y1; }
+    else { s -= L; const a = Math.PI / 2 + s / r; x = g.x0 + r + r * Math.cos(a); y = g.y0 + r + r * Math.sin(a); }
+    pts.push([x / 1.5, y]);
+  }
+  return pts;
 }
-const POS = boardPositions();
+function stadiumPath(g) {
+  const r = (g.y1 - g.y0) / 2;
+  return `M${g.x0 + r} ${g.y0}H${g.x1 - r}A${r} ${r} 0 0 1 ${g.x1 - r} ${g.y1}H${g.x0 + r}A${r} ${r} 0 0 1 ${g.x0 + r} ${g.y0}Z`;
+}
+let RING = { race: null, high: null };   // point lists for the loops currently drawn
+function setRings(hasHigh) {
+  const raceG = hasHigh ? GEOM.inner : GEOM.outer;
+  RING = { race: loopPts(raceG, 24), high: hasHigh ? loopPts(GEOM.outer, 24) : null, raceG, highG: hasHigh ? GEOM.outer : null };
+}
+const SHORT = { payday: 'Payday', opp: 'Deal', doodad: 'Doodad', market: 'Market', charity: 'Give', baby: 'Baby', downsized: 'Layoff', payout: 'Payout', hsdeal: 'Venture', windfall: 'Windfall', audit: 'Audit', luxury: 'Luxury', dream: 'Dream' };
 
-function tokenXY(idx, slot, total) {
-  const [r, c] = POS[idx];
-  const off = total > 1 ? (slot - (total - 1) / 2) * 3.2 : 0;
-  return { left: (c + .5) * 100 / 7 + off, top: (r + .5) * 100 / 7 + (total > 1 ? (slot % 2 ? 1.6 : -1.6) : 0) };
+function tokenXY(p, idx, slot, total) {
+  const pts = (p.stage === 'high' && RING.high) ? RING.high : RING.race;
+  const [x, y] = pts[idx % pts.length];
+  const off = total > 1 ? (slot - (total - 1) / 2) * 2.4 : 0;
+  return { left: x + off, top: y + (total > 1 ? (slot % 2 ? 2.2 : -2.2) : 0) };
 }
 function tokenScreenPos(pid) {
   const el = pid && document.querySelector(`.token[data-id="${pid}"]`);
@@ -94,6 +115,7 @@ function animateTokens() {
   if (!S || S.state !== 'playing' || moving) return;
   const tgt = {}; S.players.forEach(p => tgt[p.id] = p.pos);
   const n = S.board.length;
+  S.players.forEach(p => { if (shownStage[p.id] !== p.stage) { shownStage[p.id] = p.stage; shown[p.id] = p.pos; } });
   const todo = S.players.filter(p => shown[p.id] != null && shown[p.id] !== p.pos);
   S.players.forEach(p => { if (shown[p.id] == null) shown[p.id] = p.pos; });
   if (!todo.length) return layoutTokens();
@@ -108,10 +130,10 @@ function animateTokens() {
 
 function layoutTokens() {
   const byCell = {};
-  S.players.forEach(p => { const i = shown[p.id] != null ? shown[p.id] : p.pos; (byCell[i] = byCell[i] || []).push(p); });
-  Object.entries(byCell).forEach(([i, list]) => list.forEach((p, slot) => {
+  S.players.forEach(p => { const i = shown[p.id] != null ? shown[p.id] : p.pos; const k = p.stage + ':' + i; (byCell[k] = byCell[k] || []).push(p); });
+  Object.entries(byCell).forEach(([k, list]) => list.forEach((p, slot) => {
     const el = document.querySelector(`.token[data-id="${p.id}"]`); if (!el) return;
-    const xy = tokenXY(+i, slot, list.length); el.style.left = xy.left + '%'; el.style.top = xy.top + '%';
+    const xy = tokenXY(p, +k.split(':')[1], slot, list.length); el.style.left = xy.left + '%'; el.style.top = xy.top + '%';
   }));
 }
 
@@ -202,17 +224,25 @@ function centerStage() {
   return `<div class="who">${ART.avatar(cur.avatar, 54)}<div><b>${esc(cur.name)}</b><span class="mute">${esc(cur.prof)} • ${peso(cur.cash)} cash</span></div><div style="margin-left:auto">${dice && t.phase !== 'roll' ? dice : ''}</div></div><div class="body">${body}</div>`;
 }
 
+function boardHTML(hasHigh) {
+  const rg = RING.raceG, hg = RING.highG;
+  const band = (g, base, line, w) => `<path d="${stadiumPath(g)}" fill="none" stroke="#1d2433" stroke-width="${w + 1.1}"/><path d="${stadiumPath(g)}" fill="none" stroke="${base}" stroke-width="${w}"/><path d="${stadiumPath(g)}" fill="none" stroke="${line}" stroke-width=".45" stroke-dasharray="1.3 2.1" stroke-linecap="round"/>`;
+  const svg = `<svg class="track" viewBox="0 0 150 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <rect x="2" y="3" width="146" height="96" rx="48" fill="rgba(29,36,51,.25)"/><rect x="1" y="1" width="146" height="96" rx="48" fill="#efe3c6" stroke="#1d2433" stroke-width=".55"/>
+    ${hasHigh ? band(hg, '#273452', '#d9a621', hg.tile + 2) : ''}${band(rg, '#e2d2a6', 'rgba(29,36,51,.55)', rg.tile + 2)}</svg>`;
+  const ring = (type, pts, g, ringName) => type.map((tp, i) => {
+    const sp = SPACES[tp] || SPACES.opp, [x, y] = pts[i];
+    return `<div class="cell" data-ring="${ringName}" data-i="${i}" style="left:${x}%;top:${y}%;width:${g.tile / 1.5}%;height:${g.tile}%;--c1:${sp.c1}" title="${esc(sp.n)}">${i === 0 ? '<span class="start">START</span>' : ''}${ART.icon(tp)}<span class="nm">${SHORT[tp] || sp.n}</span></div>`;
+  }).join('');
+  return svg + ring(S.boards.race, RING.race, rg, 'race') + (hasHigh ? ring(S.boards.high, RING.high, hg, 'high') : '') + `<div class="stage" id="stage"></div><div class="tokens" id="tokens"></div>`;
+}
+
 let gameKey = '';
 function renderGame() {
   const t = S.turn;
-  const curP = t && S.players.find(p => p.id === t.pid), stg = curP ? curP.stage : 'race';
-  const bd = (S.boards && S.boards[stg]) || S.board;
-  const cells = bd.map((type, i) => {
-    const sp = SPACES[type], [r, c] = POS[i];
-    const cur = t && S.players.find(p => p.id === t.pid && p.pos === i);
-    return `<div class="cell ${cur ? 'cur' : ''}" style="grid-row:${r + 1};grid-column:${c + 1};--c1:${sp.c1};--c2:${sp.c2}">${i === 0 ? '<span class="start">START</span>' : ''}${ART.icon(type)}<span class="nm">${sp.n}</span></div>`;
-  }).join('');
-  const toks = S.players.filter(p => p.stage === stg).map(p => `<div class="token ${t && t.pid === p.id ? 'cur' : ''}" data-id="${p.id}" style="left:${(POS[p.pos][1] + .5) * 100 / 7}%;top:${(POS[p.pos][0] + .5) * 100 / 7}%">${ART.avatar(p.avatar)}</div>`).join('');
+  const curP = t && S.players.find(p => p.id === t.pid);
+  const hasHigh = !!S.settings.dreams;
+  const toks = S.players.map(p => `<div class="token ${t && t.pid === p.id ? 'cur' : ''}" data-id="${p.id}">${ART.avatar(p.avatar)}</div>`).join('');
   const ranked = rankPlayers(S.players);
   const plist = ranked.map(p => {
     const c = p.calc, dr = p.stage === 'high' && dreamById(p.dream), pct = dr ? Math.min(100, Math.round(p.cash / dr.cost * 100)) : Math.min(100, Math.round(c.coverage * 100));
@@ -226,20 +256,23 @@ function renderGame() {
   const stageEl = document.querySelector('.stage');
   const stageHTML = centerStage();
   const first = !document.querySelector('.board');
+  setRings(hasHigh);
   if (first) {
-    app.innerHTML = topbar(`<span class="pill" id="rnd"></span><span class="pill timerpill" id="timerpill" style="display:none"></span>
+    app.innerHTML = topbar(`${hasHigh ? '<span class="pill legend"><i class="sw sw-in"></i>Inner: Rat Race <i class="sw sw-out"></i>Outer: High Stakes</span>' : ''}<span class="pill" id="rnd"></span><span class="pill timerpill" id="timerpill" style="display:none"></span>
       <button class="sec" onclick="send({t:'skip_turn'})">Skip turn</button>
       <button class="sec" onclick="if(confirm('End the game and show the debrief?'))send({t:'end_game'})">End game</button>`) + `<div class="host">
-      <div class="boardwrap"><div class="board" id="board"></div></div>
+      <div class="boardwrap"><div class="board loop" id="board"></div></div>
       <div class="side"><div id="rejoin"></div><div class="plist" id="plist"></div><div class="logbox" id="logbox"></div></div></div>`;
   }
   const board = document.getElementById('board');
   const sig = stageHTML;
-  board.classList.toggle('hs', stg === 'high');
-  if (first || board.dataset.cells !== bd.join()) { board.dataset.cells = bd.join(); board.innerHTML = cells + `<div class="stage" id="stage"></div><div class="tokens" id="tokens"></div>`; gameKey = ''; }
+  if (first || board.dataset.built !== String(hasHigh)) { board.dataset.built = String(hasHigh); board.innerHTML = boardHTML(hasHigh); gameKey = ''; }
   document.getElementById('tokens').innerHTML = toks;
-  // refresh current cell highlight without rebuilding stage
-  [...board.querySelectorAll('.cell')].forEach((el, i) => el.classList.toggle('cur', !!(t && S.players.find(p => p.id === t.pid && p.pos === i))));
+  // highlight the tile the current player stands on, in its own loop
+  board.querySelectorAll('.cell').forEach(el => {
+    const p = curP && curP.stage === el.dataset.ring && curP.pos === +el.dataset.i;
+    el.classList.toggle('cur', !!p);
+  });
   const stage = document.getElementById('stage');
   if (gameKey !== sig) { stage.innerHTML = sig; gameKey = sig; }
   document.getElementById('plist').innerHTML = plist;
